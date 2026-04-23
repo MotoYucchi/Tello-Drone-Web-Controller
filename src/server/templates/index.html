@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="description" content="Tello Drone Web Controller - WiFiバインド対応、LineTrace搭載のドローン操作アプリ">
+    <title>Tello Drone Controller</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+
+<!-- ===== Header ===== -->
+<header class="header">
+    <div class="container">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon"><i class="fas fa-helicopter"></i></div>
+                <h1>Tello Controller</h1>
+            </div>
+            <div class="header-right">
+                <div class="status-badge" id="statusBadge">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">切断中</span>
+                </div>
+                <button class="btn btn-primary" id="btnConnect">
+                    <i class="fas fa-plug"></i>
+                    <span>接続</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</header>
+
+<!-- ===== Main ===== -->
+<main class="main">
+    <div class="container">
+        <div class="main-grid">
+
+            <!-- ===== Video Section ===== -->
+            <div class="video-section card">
+                <div class="video-wrapper">
+                    <img id="videoStream" class="video-stream" src="" alt="Tello映像" style="display:none;">
+                    <div class="video-overlay" id="videoOverlay">
+                        <div class="video-overlay-content">
+                            <div class="icon-large"><i class="fas fa-video-slash"></i></div>
+                            <p>映像ストリーミング停止中</p>
+                            <button class="btn btn-primary" id="btnVideoStart">
+                                <i class="fas fa-play"></i> 映像開始
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="video-controls">
+                    <button class="btn btn-sm btn-icon" id="btnVideoStop" title="映像停止">
+                        <i class="fas fa-stop"></i>
+                    </button>
+                    <button class="btn btn-sm btn-icon" id="btnScreenshot" title="スクリーンショット">
+                        <i class="fas fa-camera"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- ===== Status Panel ===== -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon"><i class="fas fa-chart-bar"></i></span>
+                    ステータス
+                </div>
+                <div class="card-body">
+                    <div class="status-bar">
+                        <div class="status-item">
+                            <span class="icon"><i class="fas fa-battery-three-quarters"></i></span>
+                            <div class="info">
+                                <span class="label">バッテリー</span>
+                                <span class="value" id="valBattery">--%</span>
+                            </div>
+                        </div>
+                        <div class="status-item">
+                            <span class="icon"><i class="fas fa-arrows-alt-v"></i></span>
+                            <div class="info">
+                                <span class="label">高度</span>
+                                <span class="value" id="valHeight">--cm</span>
+                            </div>
+                        </div>
+                        <div class="status-item">
+                            <span class="icon"><i class="fas fa-thermometer-half"></i></span>
+                            <div class="info">
+                                <span class="label">温度</span>
+                                <span class="value" id="valTemp">--°C</span>
+                            </div>
+                        </div>
+                        <div class="status-item">
+                            <span class="icon"><i class="fas fa-clock"></i></span>
+                            <div class="info">
+                                <span class="label">飛行時間</span>
+                                <span class="value" id="valTime">--s</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== Flight Control ===== -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon"><i class="fas fa-plane-departure"></i></span>
+                    飛行制御
+                </div>
+                <div class="card-body">
+                    <div class="flight-buttons">
+                        <button class="btn btn-success" id="btnTakeoff">
+                            <i class="fas fa-plane-departure"></i> 離陸
+                        </button>
+                        <button class="btn btn-warning" id="btnLand">
+                            <i class="fas fa-plane-arrival"></i> 着陸
+                        </button>
+                        <button class="btn btn-danger" id="btnEmergency">
+                            <i class="fas fa-exclamation-triangle"></i> 緊急停止
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== Keyboard Guide ===== -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon"><i class="fas fa-keyboard"></i></span>
+                    キーボード操作
+                </div>
+                <div class="card-body">
+                    <div class="keyboard-layout">
+                        <div class="key-row">
+                            <div class="key" data-key="q">Q<span class="hint">左回転</span></div>
+                            <div class="key" data-key="w">W<span class="hint">前進</span></div>
+                            <div class="key" data-key="e">E<span class="hint">右回転</span></div>
+                        </div>
+                        <div class="key-row">
+                            <div class="key" data-key="a">A<span class="hint">左移動</span></div>
+                            <div class="key" data-key="s">S<span class="hint">後退</span></div>
+                            <div class="key" data-key="d">D<span class="hint">右移動</span></div>
+                        </div>
+                        <div class="key-row">
+                            <div class="key" data-key="r">R<span class="hint">上昇</span></div>
+                            <div class="key" data-key="f">F<span class="hint">下降</span></div>
+                        </div>
+                        <div class="special-keys">
+                            <div class="key special" data-key="t">T<span class="hint">離陸</span></div>
+                            <div class="key special" data-key="l">L<span class="hint">着陸</span></div>
+                            <div class="key special" data-key="space">SPC<span class="hint">緊急停止</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== LineTrace Panel ===== -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon"><i class="fas fa-route"></i></span>
+                    LineTrace
+                    <div style="margin-left: auto;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggleLineTrace">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="linetrace-controls">
+                        <!-- Color Presets -->
+                        <div>
+                            <div class="text-xs text-muted mb-sm">色プリセット</div>
+                            <div class="preset-buttons">
+                                <button class="preset-btn" data-preset="red">
+                                    <span class="dot"></span>赤
+                                </button>
+                                <button class="preset-btn" data-preset="blue">
+                                    <span class="dot"></span>青
+                                </button>
+                                <button class="preset-btn" data-preset="yellow">
+                                    <span class="dot"></span>黄
+                                </button>
+                                <button class="preset-btn" data-preset="black">
+                                    <span class="dot"></span>黒
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- HSV Sliders -->
+                        <div class="slider-group">
+                            <div class="text-xs text-muted mb-sm">HSV フィルター</div>
+                            <div class="slider-row">
+                                <label>H min</label>
+                                <input type="range" id="ltHMin" min="0" max="179" value="0">
+                                <span class="slider-value" id="ltHMinVal">0</span>
+                            </div>
+                            <div class="slider-row">
+                                <label>H max</label>
+                                <input type="range" id="ltHMax" min="0" max="179" value="179">
+                                <span class="slider-value" id="ltHMaxVal">179</span>
+                            </div>
+                            <div class="slider-row">
+                                <label>S min</label>
+                                <input type="range" id="ltSMin" min="0" max="255" value="0">
+                                <span class="slider-value" id="ltSMinVal">0</span>
+                            </div>
+                            <div class="slider-row">
+                                <label>S max</label>
+                                <input type="range" id="ltSMax" min="0" max="255" value="255">
+                                <span class="slider-value" id="ltSMaxVal">255</span>
+                            </div>
+                            <div class="slider-row">
+                                <label>V min</label>
+                                <input type="range" id="ltVMin" min="0" max="255" value="0">
+                                <span class="slider-value" id="ltVMinVal">0</span>
+                            </div>
+                            <div class="slider-row">
+                                <label>V max</label>
+                                <input type="range" id="ltVMax" min="0" max="255" value="255">
+                                <span class="slider-value" id="ltVMaxVal">255</span>
+                            </div>
+                        </div>
+
+                        <!-- Speed Control -->
+                        <div class="slider-group">
+                            <div class="slider-row">
+                                <label>速度</label>
+                                <input type="range" id="ltSpeed" min="0" max="100" value="10">
+                                <span class="slider-value" id="ltSpeedVal">10</span>
+                            </div>
+                        </div>
+
+                        <!-- LineTrace Info -->
+                        <div class="status-item mt-sm">
+                            <span class="icon"><i class="fas fa-crosshairs"></i></span>
+                            <div class="info">
+                                <span class="label">検出状態</span>
+                                <span class="value" id="ltDetected">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== QR Code Panel ===== -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon"><i class="fas fa-qrcode"></i></span>
+                    QRコード
+                </div>
+                <div class="card-body">
+                    <div class="flex gap-sm mb-md flex-wrap">
+                        <button class="btn btn-primary btn-sm" id="btnQrScan">
+                            <i class="fas fa-camera"></i> スキャン
+                        </button>
+                        <button class="btn btn-sm" id="btnQrRefresh">
+                            <i class="fas fa-sync"></i> 更新
+                        </button>
+                    </div>
+                    <div id="qrMessage" class="text-sm text-muted mb-sm" style="display:none;"></div>
+                    <div id="qrLinksList" class="qr-links-list">
+                        <div class="qr-empty">
+                            <i class="fas fa-qrcode"></i>
+                            <p>保存済みリンクはありません</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== Network / Advanced ===== -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="icon"><i class="fas fa-network-wired"></i></span>
+                    ネットワーク設定
+                </div>
+                <div class="card-body">
+                    <div class="network-select">
+                        <div class="hint">
+                            Telloに接続するインターフェースを選択（自動検出あり）
+                        </div>
+                        <select id="networkInterface">
+                            <option value="">自動検出</option>
+                        </select>
+                        <button class="btn btn-sm mt-sm" id="btnRefreshInterfaces">
+                            <i class="fas fa-sync"></i> 再検出
+                        </button>
+                    </div>
+                    <div class="settings-group mt-md">
+                        <div class="setting-row">
+                            <label>映像品質</label>
+                            <select id="videoQualityPreset">
+                                <option value="low">低品質 (320x240)</option>
+                                <option value="medium" selected>標準 (640x480)</option>
+                                <option value="high">高品質 (960x720)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</main>
+
+<!-- ===== Footer ===== -->
+<footer class="footer">
+    <div class="container">
+        <p>&copy; 2024 Tello Drone Web Controller — Powered by FastAPI</p>
+        <div class="footer-stats">
+            <span class="stat"><span class="stat-label">WS:</span> <span id="footerWsStatus">切断</span></span>
+            <span class="stat"><span class="stat-label">FPS:</span> <span id="footerFps">0</span></span>
+            <span class="stat"><span class="stat-label">IP:</span> <span id="footerLocalIp">--</span></span>
+        </div>
+    </div>
+</footer>
+
+<!-- ===== Notifications ===== -->
+<div class="notification-area" id="notificationArea"></div>
+
+<!-- ===== Scripts ===== -->
+<script src="/static/js/app.js"></script>
+<script src="/static/js/controls.js"></script>
+<script src="/static/js/linetrace.js"></script>
+<script src="/static/js/video.js"></script>
+
+</body>
+</html>
