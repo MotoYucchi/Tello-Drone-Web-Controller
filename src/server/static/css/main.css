@@ -343,7 +343,7 @@ body {
 .video-wrapper {
     position: relative;
     width: 100%;
-    aspect-ratio: 16 / 9;
+    aspect-ratio: 4 / 3;
     background: var(--bg-primary);
     border-radius: var(--border-radius-lg);
     overflow: hidden;
@@ -885,6 +885,39 @@ body {
         right: var(--gap-sm);
         left: var(--gap-sm);
         max-width: none;
+    }
+}
+
+/* Landscape 3-column layout */
+@media (orientation: landscape) and (min-width: 900px) {
+    .main-grid {
+        grid-template-columns: 1fr auto 1fr;
+        grid-template-areas:
+            "status video flight"
+            "qrcode video linetrace"
+            "network keyboard keyboard";
+        align-items: start;
+    }
+
+    #panel-video { grid-area: video; }
+    #panel-status { grid-area: status; }
+    #panel-flight { grid-area: flight; }
+    #panel-keyboard { grid-area: keyboard; }
+    #panel-linetrace { grid-area: linetrace; }
+    #panel-qrcode { grid-area: qrcode; }
+    #panel-network { grid-area: network; }
+
+    .video-section {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .video-wrapper {
+        width: auto;
+        height: calc(100vh - 240px);
+        min-height: 300px;
+        max-height: 600px;
+        aspect-ratio: 4 / 3;
     }
 }
 
