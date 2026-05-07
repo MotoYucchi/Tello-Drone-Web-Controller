@@ -42,7 +42,7 @@ if %errorlevel% neq 0 (
     echo   Installing uv...
     echo.
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo.
         echo   [ERROR] Failed to install uv.
         echo   Please install manually: https://docs.astral.sh/uv/
@@ -56,18 +56,18 @@ if %errorlevel% neq 0 (
     echo.
 
     :: Refresh PATH to pick up new uv installation
-    set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
+    set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;!PATH!"
 
     :: Verify again
     where uv >nul 2>&1
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo   [WARNING] uv not found in PATH after install.
         echo   Trying common install locations...
         if exist "%USERPROFILE%\.local\bin\uv.exe" (
-            set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+            set "PATH=%USERPROFILE%\.local\bin;!PATH!"
             echo   Found uv at %USERPROFILE%\.local\bin
         ) else if exist "%USERPROFILE%\.cargo\bin\uv.exe" (
-            set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+            set "PATH=%USERPROFILE%\.cargo\bin;!PATH!"
             echo   Found uv at %USERPROFILE%\.cargo\bin
         ) else (
             echo.
@@ -134,7 +134,7 @@ if %errorlevel% neq 0 (
     echo   uv をインストールします...
     echo.
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo.
         echo   [エラー] uv のインストールに失敗しました。
         echo   手動でインストールしてください: https://docs.astral.sh/uv/
@@ -148,18 +148,18 @@ if %errorlevel% neq 0 (
     echo.
 
     :: PATHを更新してインストールされたuvを認識
-    set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
+    set "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;!PATH!"
 
     :: 再確認
     where uv >nul 2>&1
-    if %errorlevel% neq 0 (
+    if !errorlevel! neq 0 (
         echo   [警告] インストール後もuvがPATHに見つかりません。
         echo   既知のインストール先を確認中...
         if exist "%USERPROFILE%\.local\bin\uv.exe" (
-            set "PATH=%USERPROFILE%\.local\bin;%PATH%"
+            set "PATH=%USERPROFILE%\.local\bin;!PATH!"
             echo   %USERPROFILE%\.local\bin に見つかりました
         ) else if exist "%USERPROFILE%\.cargo\bin\uv.exe" (
-            set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+            set "PATH=%USERPROFILE%\.cargo\bin;!PATH!"
             echo   %USERPROFILE%\.cargo\bin に見つかりました
         ) else (
             echo.
