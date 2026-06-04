@@ -495,10 +495,10 @@ async def get_qr_links():
     return {"success": True, "links": links, "count": len(links)}
 
 
-@app.delete("/api/qr/links/{three_digit}")
-async def delete_qr_link(three_digit: str):
+@app.delete("/api/qr/links/{qr_text:path}")
+async def delete_qr_link(qr_text: str):
     qr: QRCodeReader = app_state['qr']
-    success = qr.delete_link(three_digit)
+    success = qr.delete_link(qr_text)
     return {"success": success}
 
 

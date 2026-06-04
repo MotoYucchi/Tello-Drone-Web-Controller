@@ -148,6 +148,7 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 state_recv = _app_state['state_receiver']
                 state_recv.local_ip = tello.local_ip
                 state_recv.start()
+                _app_state['qr'].clear_links()
             return {
                 'type': 'connect_response',
                 'success': success,

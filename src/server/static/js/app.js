@@ -88,6 +88,7 @@ const App = {
                 this._updateConnectionUI(true);
                 this._updateStatus(msg.status);
                 this.notify('Tello に接続しました', 'success');
+                if (typeof QRManager !== 'undefined') QRManager.loadLinks();
             } else {
                 this.notify('Tello の接続に失敗しました', 'error');
             }
@@ -271,9 +272,37 @@ const QRManager = {
     },
 
     async deleteLink(num) {
-        await App.api('DELETE', `/qr/links/${num}`);
-        App.notify(`リンク ${num} を削除しました`, 'info');
+        await App.api('DELETE', `/qr/links/${encodeURIComponent(num)}`);
+        App.notify(`リンクを削除しました`, 'info');
         this.loadLinks();
+    },
+
+    async downloadCSV() {
+        const result = await App.api('GET', '/qr/links');
+        const links = result.links || {};
+        if (Object.keys(links).length === 0) {
+            App.notify('ダウンロードするデータがありません', 'warning');
+            return;
+        }
+
+        let csvContent = "\uFEFF"; // BOM for Excel
+        csvContent += "日時,テキスト,URL\n";
+        for (const [key, data] of Object.entries(links)) {
+            const dt = data.timestamp || "";
+            const text = (data.qr_text || "").replace(/"/g, '""');
+            const url = (data.link || "").replace(/"/g, '""');
+            csvContent += `"${dt}","${text}","${url}"\n`;
+        }
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `qr_data_${Date.now()}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     },
 };
 
@@ -334,6 +363,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('btnQrRefresh').addEventListener('click', () => {
         QRManager.loadLinks();
+    });
+
+    document.getElementById('btnQrDownload').addEventListener('click', () => {
+        QRManager.downloadCSV();
     });
 
     document.getElementById('btnRefreshInterfaces').addEventListener('click', () => {
