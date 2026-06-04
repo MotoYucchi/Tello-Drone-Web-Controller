@@ -62,7 +62,7 @@ class QRCodeReader:
         複数の前処理を試みて検出率を向上。
 
         Returns:
-            (検出成功, QRテキスト, 3桁数字)
+            (検出成功, QRテキスト)
         """
         # 試行する前処理のリスト
         preprocessors = [
@@ -78,13 +78,12 @@ class QRCodeReader:
                 data, bbox, _ = self.detector.detectAndDecode(processed)
                 if data:
                     logger.info(f"QR検出成功: {data}")
-                    three_digit = self._extract_three_digit(data)
-                    return True, data, three_digit
+                    return True, data
             except Exception as e:
                 logger.debug(f"前処理 {preprocess.__name__} でエラー: {e}")
                 continue
 
-        return False, None, None
+        return False, None
 
     def _preprocess_adaptive(self, frame: np.ndarray) -> np.ndarray:
         """適応的閾値処理"""
@@ -118,15 +117,7 @@ class QRCodeReader:
     # ユーティリティ
     # =========================================================================
 
-    @staticmethod
-    def _extract_three_digit(text: str) -> Optional[str]:
-        """テキストから独立した3桁数字を抽出"""
-        matches = re.findall(r'(?<!\d)\d{3}(?!\d)', text)
-        return matches[0] if matches else None
-
-    def generate_link(self, three_digit: str) -> str:
-        """3桁数字からリンクを生成"""
-        return f"{self.BASE_URL}{three_digit}"
+    # _extract_three_digit and generate_link removed as we now support arbitrary text
 
     # =========================================================================
     # リンク管理
@@ -138,14 +129,12 @@ class QRCodeReader:
             'success': False,
             'qr_detected': False,
             'qr_text': None,
-            'three_digit_number': None,
-            'link': None,
             'already_stored': False,
             'newly_stored': False,
             'message': '',
         }
 
-        detected, qr_text, three_digit = self.detect_from_frame(frame)
+        detected, qr_text = self.detect_from_frame(frame)
 
         if not detected:
             result['message'] = 'QRコードが検出されませんでした'
@@ -154,27 +143,21 @@ class QRCodeReader:
         result['qr_detected'] = True
         result['qr_text'] = qr_text
 
-        if not three_digit:
-            result['message'] = 'QRコードに3桁の数字が含まれていません'
-            return result
-
-        result['three_digit_number'] = three_digit
-        result['link'] = self.generate_link(three_digit)
-
-        if three_digit in self.stored_links:
+        # Using the qr_text as the key
+        if qr_text in self.stored_links:
             result['already_stored'] = True
-            result['message'] = f'数字 {three_digit} は既に保存されています'
+            result['message'] = f'テキストは既に保存されています'
         else:
-            self.stored_links[three_digit] = {
-                'link': result['link'],
+            self.stored_links[qr_text] = {
+                'link': qr_text if qr_text.startswith("http") else None,
                 'qr_text': qr_text,
                 'timestamp': datetime.now().isoformat(),
             }
             if self._save_links():
                 result['newly_stored'] = True
-                result['message'] = f'新しいリンクを保存しました: {three_digit}'
+                result['message'] = f'新しいテキストを保存しました'
             else:
-                result['message'] = 'リンクの保存に失敗しました'
+                result['message'] = 'テキストの保存に失敗しました'
                 return result
 
         result['success'] = True

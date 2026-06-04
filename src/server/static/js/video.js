@@ -26,6 +26,18 @@ const VideoManager = {
         this.streamImg.style.display = 'none';
         this.overlay.classList.remove('hidden');
         App.videoStreaming = false;
+        
+        const toggle = document.getElementById('toggleVideoMode');
+        if(toggle) toggle.checked = false;
+    },
+
+    toggleMode(isLineTrace) {
+        if (!App.videoStreaming || !this.streamImg) return;
+        if (isLineTrace) {
+            this.streamImg.src = '/linetrace_stream?' + Date.now();
+        } else {
+            this.streamImg.src = '/video_stream?' + Date.now();
+        }
     },
 
     screenshot() {
@@ -57,4 +69,11 @@ const VideoManager = {
 // Init
 document.addEventListener('DOMContentLoaded', () => {
     VideoManager.init();
+
+    const toggle = document.getElementById('toggleVideoMode');
+    if (toggle) {
+        toggle.addEventListener('change', (e) => {
+            VideoManager.toggleMode(e.target.checked);
+        });
+    }
 });

@@ -48,6 +48,20 @@ async def lifespan(app: FastAPI):
     app_state['linetrace'] = LineTraceEngine()
     app_state['qr'] = QRCodeReader()
 
+    def process_video_frame(frame: 'numpy.ndarray'):
+        lt: LineTraceEngine = app_state.get('linetrace')
+        tello: TelloUDPController = app_state.get('tello')
+        if lt and tello:
+            # ライントレース処理
+            result = lt.process_frame(frame)
+            if lt.active:
+                if result.detected:
+                    tello.set_rc(0, result.forward_speed, 0, int(result.yaw_value))
+                else:
+                    tello.set_rc(0, 0, 0, 0)
+    
+    app_state['video'].on_frame = process_video_frame
+
     # WebSocket ハンドラーに状態を共有
     set_app_state(app_state)
 
@@ -336,6 +350,35 @@ async def video_stream():
         raise HTTPException(503, "映像ストリーミング未開始")
     return StreamingResponse(
         video.generate_mjpeg_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+import cv2
+def generate_linetrace_mjpeg():
+    import time
+    video: TelloVideoReceiver = app_state['video']
+    lt: LineTraceEngine = app_state['linetrace']
+    while video.streaming:
+        result = lt._last_result
+        if result and result.debug_frame is not None:
+            ok, encoded = cv2.imencode('.jpg', result.debug_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if ok:
+                yield (
+                    b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n' + encoded.tobytes() + b'\r\n'
+                )
+                time.sleep(0.05)
+                continue
+        time.sleep(0.05)
+
+@app.get("/linetrace_stream")
+async def linetrace_stream():
+    """ライントレース デバッグ用MJPEG映像ストリーム"""
+    video: TelloVideoReceiver = app_state['video']
+    if not video.streaming:
+        raise HTTPException(503, "映像ストリーミング未開始")
+    return StreamingResponse(
+        generate_linetrace_mjpeg(),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 

@@ -138,12 +138,7 @@ class LineTraceEngine:
     def process_frame(self, frame: np.ndarray) -> LineTraceResult:
         """
         フレームを処理してライン検出結果を返す。
-
-        drone_linetrace_advanced.py の処理を忠実に移植:
-        1. リサイズ → ROI切り出し
-        2. HSV変換 → inRange二値化 → 膨張
-        3. ラベリング → 最大面積領域の重心取得
-        4. 重心位置からyaw値算出
+        処理の詳細は LineTraceAlgorithm に委譲。
 
         Args:
             frame: BGR画像 (numpy配列)
@@ -155,79 +150,28 @@ class LineTraceEngine:
         p = self.params
 
         try:
-            # (1) リサイズ
-            small = cv2.resize(frame, (p.process_width, p.process_height))
+            from .algorithm import LineTraceAlgorithm
+            detected, mx, my, area, bbox, debug = LineTraceAlgorithm.process_image(frame, p)
+            
+            if detected:
+                result.detected = True
+                result.center_x = mx
+                result.center_y = my
+                result.area = area
+                result.bbox = bbox
 
-            # (2) ROI切り出し（フレーム下部）
-            h = small.shape[0]
-            roi_top = int(h * p.roi_top_ratio)
-            roi_bottom = int(h * p.roi_bottom_ratio)
-            roi = small[roi_top:roi_bottom, :]
+                # yaw値算出
+                frame_center_x = p.process_width // 2
+                dx = float(frame_center_x - mx)
 
-            # (3) HSV変換
-            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+                # 不感帯
+                yaw = 0.0 if abs(dx) < p.deadzone else -dx
+                # リミッタ
+                yaw = max(-p.yaw_limit, min(p.yaw_limit, yaw))
 
-            # (4) inRange二値化
-            lower = np.array([p.h_min, p.s_min, p.v_min])
-            upper = np.array([p.h_max, p.s_max, p.v_max])
-            binary = cv2.inRange(hsv, lower, upper)
-
-            # (5) 膨張処理（虎ロープなどの途切れを繋げる）
-            kernel = np.ones((p.kernel_size, p.kernel_size), np.uint8)
-            dilated = cv2.dilate(binary, kernel, iterations=1)
-
-            # (6) マスク適用
-            masked = cv2.bitwise_and(hsv, hsv, mask=dilated)
-
-            # (7) ラベリング
-            num_labels, label_img, stats, centers = cv2.connectedComponentsWithStats(dilated)
-
-            # 背景(label 0)を除去
-            num_labels -= 1
-            if num_labels < 1:
-                result.debug_frame = cv2.cvtColor(masked, cv2.COLOR_HSV2BGR)
-                return result
-
-            stats = np.delete(stats, 0, 0)
-            centers = np.delete(centers, 0, 0)
-
-            # (8) 最大面積の領域を取得
-            max_idx = np.argmax(stats[:, 4])
-            x, y, w, h_box, s = stats[max_idx]
-            mx = int(centers[max_idx][0])
-            my = int(centers[max_idx][1])
-
-            result.detected = True
-            result.center_x = mx
-            result.center_y = my
-            result.area = int(s)
-            result.bbox = (int(x), int(y), int(w), int(h_box))
-
-            # (9) yaw値算出（画面中心との差分）
-            frame_center_x = roi.shape[1] // 2  # 240
-            dx = float(frame_center_x - mx)
-
-            # 不感帯
-            yaw = 0.0 if abs(dx) < p.deadzone else -dx
-            # リミッタ
-            yaw = max(-p.yaw_limit, min(p.yaw_limit, yaw))
-
-            result.yaw_value = yaw
-            result.forward_speed = p.forward_speed
-
-            # (10) デバッグ画像作成
-            debug = cv2.cvtColor(masked, cv2.COLOR_HSV2BGR)
-            cv2.rectangle(debug, (x, y), (x + w, y + h_box), (255, 0, 255), 2)
-            cv2.putText(debug, f"area:{s}", (x, y + h_box + 15),
-                        cv2.FONT_HERSHEY_PLAIN, 1, (0, 255, 255))
-            cv2.drawMarker(debug, (mx, my), (0, 255, 0),
-                           cv2.MARKER_CROSS, 20, 2)
-            # yaw方向インジケーター
-            cv2.arrowedLine(debug,
-                            (frame_center_x, debug.shape[0] // 2),
-                            (frame_center_x + int(yaw), debug.shape[0] // 2),
-                            (0, 0, 255), 2)
-
+                result.yaw_value = yaw
+                result.forward_speed = p.forward_speed
+            
             result.debug_frame = debug
 
         except Exception as e:

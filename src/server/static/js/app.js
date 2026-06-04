@@ -231,10 +231,10 @@ const QRManager = {
         msgEl.style.display = 'block';
 
         if (result.newly_stored) {
-            App.notify(`QR: ${result.three_digit_number} → リンク保存`, 'success');
+            App.notify(`QR 保存: ${result.qr_text}`, 'success');
             this.loadLinks();
         } else if (result.already_stored) {
-            App.notify(`QR: ${result.three_digit_number} は保存済み`, 'info');
+            App.notify(`QR 読込済: ${result.qr_text}`, 'info');
         } else if (!result.qr_detected) {
             App.notify('QRコードが検出されませんでした', 'warning');
         }
@@ -248,13 +248,21 @@ const QRManager = {
         }
 
         container.innerHTML = '';
-        for (const [num, data] of Object.entries(links)) {
+        for (const [key, data] of Object.entries(links)) {
             const item = document.createElement('div');
             item.className = 'qr-link-item';
+            
+            // Generate link or plain text display
+            let contentHTML = '';
+            if (data.link) {
+                contentHTML = `<a href="${data.link}" target="_blank" rel="noopener">${data.qr_text}</a>`;
+            } else {
+                contentHTML = `<span>${data.qr_text}</span>`;
+            }
+
             item.innerHTML = `
-                <span class="link-number">${num}</span>
-                <a href="${data.link}" target="_blank" rel="noopener">${data.link}</a>
-                <button class="btn btn-sm btn-danger btn-delete" onclick="QRManager.deleteLink('${num}')">
+                ${contentHTML}
+                <button class="btn btn-sm btn-danger btn-delete" onclick="QRManager.deleteLink('${key}')">
                     <i class="fas fa-trash"></i>
                 </button>
             `;
