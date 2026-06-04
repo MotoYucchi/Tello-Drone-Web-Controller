@@ -143,7 +143,7 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             local_ip = msg.get('local_ip', '')
             if local_ip:
                 tello.local_ip = local_ip
-            success = tello.connect()
+            success = await asyncio.to_thread(tello.connect)
             if success:
                 state_recv = _app_state['state_receiver']
                 state_recv.local_ip = tello.local_ip
@@ -159,10 +159,10 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             _app_state['linetrace'].active = False
             video = _app_state['video']
             if video.streaming:
-                tello.stream_off()
+                await asyncio.to_thread(tello.stream_off)
                 video.stop()
             _app_state['state_receiver'].stop()
-            success = tello.disconnect()
+            success = await asyncio.to_thread(tello.disconnect)
             return {'type': 'disconnect_response', 'success': success}
 
         elif msg_type == 'keyboard':
@@ -185,28 +185,27 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         elif msg_type == 'takeoff':
             tello = _app_state['tello']
-            success = tello.takeoff()
+            success = await asyncio.to_thread(tello.takeoff)
             return {'type': 'takeoff_response', 'success': success}
 
         elif msg_type == 'land':
             tello = _app_state['tello']
             _app_state['linetrace'].active = False
-            success = tello.land()
+            success = await asyncio.to_thread(tello.land)
             return {'type': 'land_response', 'success': success}
 
         elif msg_type == 'emergency':
             tello = _app_state['tello']
             _app_state['linetrace'].active = False
-            success = tello.emergency()
+            success = await asyncio.to_thread(tello.emergency)
             return {'type': 'emergency_response', 'success': success}
 
         elif msg_type == 'video_start':
             tello = _app_state['tello']
             video = _app_state['video']
             if tello.is_connected:
-                tello.stream_on()
-                import time as t
-                t.sleep(2)
+                await asyncio.to_thread(tello.stream_on)
+                await asyncio.sleep(2)
                 success = video.start()
             else:
                 success = False
@@ -217,7 +216,7 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             video = _app_state['video']
             video.stop()
             if tello.is_connected:
-                tello.stream_off()
+                await asyncio.to_thread(tello.stream_off)
             return {'type': 'video_response', 'success': True}
 
         elif msg_type == 'linetrace_start':
@@ -275,15 +274,15 @@ async def _handle_keyboard(msg: Dict[str, Any]) -> Dict[str, Any]:
     # 単発キー
     if action == 'single':
         if key == 't':
-            success = tello.takeoff()
+            success = await asyncio.to_thread(tello.takeoff)
             return {'type': 'keyboard_response', 'success': success, 'action': 'takeoff'}
         elif key == 'l':
             _app_state['linetrace'].active = False
-            success = tello.land()
+            success = await asyncio.to_thread(tello.land)
             return {'type': 'keyboard_response', 'success': success, 'action': 'land'}
         elif key == 'space':
             _app_state['linetrace'].active = False
-            success = tello.emergency()
+            success = await asyncio.to_thread(tello.emergency)
             return {'type': 'keyboard_response', 'success': success, 'action': 'emergency'}
 
     # RC制御キー（press/release で連続制御）

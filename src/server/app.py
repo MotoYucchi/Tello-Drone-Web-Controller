@@ -48,9 +48,28 @@ async def lifespan(app: FastAPI):
     app_state['linetrace'] = LineTraceEngine()
     app_state['qr'] = QRCodeReader()
 
+    app_state['loop'] = asyncio.get_running_loop()
+    app_state['qr_last_scan'] = 0.0
+
     def process_video_frame(frame: 'numpy.ndarray'):
         lt: LineTraceEngine = app_state.get('linetrace')
         tello: TelloUDPController = app_state.get('tello')
+        
+        # QRコードの自動スキャン（1秒に1回）
+        import time
+        now = time.time()
+        if now - app_state.get('qr_last_scan', 0.0) > 1.0:
+            app_state['qr_last_scan'] = now
+            qr: QRCodeReader = app_state.get('qr')
+            if qr:
+                qr_res = qr.process_detection(frame)
+                if qr_res.get('success') and qr_res.get('newly_stored'):
+                    qr_res['type'] = 'qr_response'
+                    loop = app_state.get('loop')
+                    if loop:
+                        from .ws_handler import manager
+                        asyncio.run_coroutine_threadsafe(manager.broadcast(qr_res), loop)
+
         if lt and tello:
             # ライントレース処理
             result = lt.process_frame(frame)
@@ -354,14 +373,25 @@ async def video_stream():
     )
 
 import cv2
+import numpy as np
+
 def generate_linetrace_mjpeg():
     import time
     video: TelloVideoReceiver = app_state['video']
     lt: LineTraceEngine = app_state['linetrace']
+    
+    # プレースホルダーの黒画像
+    blank_frame = np.zeros((112, 480, 3), dtype=np.uint8)
+    
     while video.streaming:
-        result = lt._last_result
-        if result and result.debug_frame is not None:
-            ok, encoded = cv2.imencode('.jpg', result.debug_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        try:
+            result = lt._last_result
+            if result and result.debug_frame is not None:
+                img = result.debug_frame
+            else:
+                img = blank_frame
+
+            ok, encoded = cv2.imencode('.jpg', img, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             if ok:
                 yield (
                     b'--frame\r\n'
@@ -369,6 +399,8 @@ def generate_linetrace_mjpeg():
                 )
                 time.sleep(0.05)
                 continue
+        except Exception as e:
+            logger.debug(f"linetrace_mjpeg encode error: {e}")
         time.sleep(0.05)
 
 @app.get("/linetrace_stream")

@@ -144,12 +144,14 @@ class QRCodeReader:
         result['qr_text'] = qr_text
 
         # Using the qr_text as the key
+        is_url = re.match(r'^https?://', qr_text.strip(), re.IGNORECASE) is not None
+        
         if qr_text in self.stored_links:
             result['already_stored'] = True
             result['message'] = f'テキストは既に保存されています'
         else:
             self.stored_links[qr_text] = {
-                'link': qr_text if qr_text.startswith("http") else None,
+                'link': qr_text.strip() if is_url else None,
                 'qr_text': qr_text,
                 'timestamp': datetime.now().isoformat(),
             }
