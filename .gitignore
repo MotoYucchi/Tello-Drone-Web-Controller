@@ -4,3 +4,5 @@ __pycache__/
 .venv
 .venv_back
 tello.code-workspace
+logs/
+.pytest_cache/

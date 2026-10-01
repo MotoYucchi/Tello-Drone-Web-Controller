@@ -2,25 +2,29 @@
 FastAPI メインアプリケーション
 
 Tello Drone Web Controller のメインサーバー。
-WebSocket + REST API + 映像ストリーミングを統合。
+WebSocket + REST API + 映像ストリーミング + 飛行ログ + 静止画撮影を統合。
 """
 
 import asyncio
 import logging
 import os
+from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 
-from fastapi import FastAPI, Request, HTTPException
+import cv2
+import numpy as np
+from fastapi import FastAPI, Request, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from ..tello.udp_controller import TelloUDPController
 from ..tello.state_receiver import TelloStateReceiver
 from ..tello.video_receiver import TelloVideoReceiver
+from ..tello.logger import FlightLogger
 from ..linetrace.engine import LineTraceEngine, COLOR_PRESETS
 from ..qr.reader import QRCodeReader
 from .ws_handler import websocket_router, set_app_state
@@ -47,9 +51,18 @@ async def lifespan(app: FastAPI):
     app_state['video'] = TelloVideoReceiver()
     app_state['linetrace'] = LineTraceEngine()
     app_state['qr'] = QRCodeReader()
+    app_state['logger'] = FlightLogger()
 
     app_state['loop'] = asyncio.get_running_loop()
     app_state['qr_last_scan'] = 0.0
+
+    # テレメトリ更新コールバック
+    def on_telemetry_update(state: Dict[str, Any]):
+        fl: FlightLogger = app_state.get('logger')
+        if fl:
+            fl.update_telemetry(state)
+
+    app_state['state_receiver'].on_state_update = on_telemetry_update
 
     def send_to_pashatoku(qr_text: str):
         """PashatokuへQRデータを送信"""
@@ -72,9 +85,10 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Pashatokuへの送信に失敗しました: {e}")
 
-    def process_video_frame(frame: 'numpy.ndarray'):
+    def process_video_frame(frame: np.ndarray):
         lt: LineTraceEngine = app_state.get('linetrace')
         tello: TelloUDPController = app_state.get('tello')
+        fl: FlightLogger = app_state.get('logger')
         
         # QRコードの自動スキャン（1秒に1回）
         import time
@@ -85,7 +99,9 @@ async def lifespan(app: FastAPI):
             if qr:
                 qr_res = qr.process_detection(frame)
                 if qr_res.get('success') and qr_res.get('newly_stored'):
-                    # Pashatokuに送信 (別スレッドで実行してブロックを防ぐ)
+                    if fl:
+                        fl.log_event(f"QR Scanned: {qr_res.get('qr_text')}")
+                    # Pashatokuに送信
                     loop = app_state.get('loop')
                     if loop:
                         loop.run_in_executor(None, send_to_pashatoku, qr_res.get('qr_text'))
@@ -98,11 +114,18 @@ async def lifespan(app: FastAPI):
         if lt and tello:
             # ライントレース処理
             result = lt.process_frame(frame)
+            if fl:
+                fl.update_linetrace(lt.get_last_result_info())
+
             if lt.active:
                 if result.detected:
-                    tello.set_rc(0, result.forward_speed, 0, int(result.yaw_value))
+                    tello.set_rc(result.lr_value, result.forward_speed, 0, result.yaw_value)
+                    if fl:
+                        fl.update_rc(result.lr_value, result.forward_speed, 0, result.yaw_value, mode="linetrace")
                 else:
                     tello.set_rc(0, 0, 0, 0)
+                    if fl:
+                        fl.update_rc(0, 0, 0, 0, mode="linetrace")
     
     app_state['video'].on_frame = process_video_frame
 
@@ -115,6 +138,10 @@ async def lifespan(app: FastAPI):
     # クリーンアップ
     logger.info("=== Tello Web Controller 終了中 ===")
     try:
+        fl: FlightLogger = app_state.get('logger')
+        if fl:
+            fl.stop_session()
+
         tello: TelloUDPController = app_state.get('tello')
         if tello and tello.is_connected:
             tello.disconnect()
@@ -136,7 +163,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Tello Drone Web Controller",
     description="Telloドローン Web制御アプリケーション",
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan,
 )
 
@@ -190,15 +217,17 @@ class VideoQualityRequest(BaseModel):
     quality: int = Field(default=80, ge=10, le=100)
 
 class LineTraceParamsRequest(BaseModel):
+    camera_mode: str = Field(default="standard", description="standard (通常機体) または downward (改造機体)")
     h_min: int = Field(default=0, ge=0, le=179)
     h_max: int = Field(default=179, ge=0, le=179)
     s_min: int = Field(default=0, ge=0, le=255)
     s_max: int = Field(default=255, ge=0, le=255)
     v_min: int = Field(default=0, ge=0, le=255)
     v_max: int = Field(default=255, ge=0, le=255)
-    forward_speed: int = Field(default=10, ge=0, le=100)
-    deadzone: float = Field(default=50.0, ge=0, le=200)
-    yaw_limit: float = Field(default=70.0, ge=0, le=100)
+    gaussian_ksize: int = Field(default=5, ge=1, le=31)
+    forward_speed: int = Field(default=15, ge=0, le=100)
+    deadzone: float = Field(default=20.0, ge=0, le=200)
+    yaw_limit: float = Field(default=60.0, ge=0, le=100)
 
 
 # =========================================================================
@@ -219,6 +248,8 @@ async def index(request: Request):
 async def connect_tello(req: ConnectRequest):
     """Telloに接続"""
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
+
     if tello.is_connected:
         return {"success": True, "message": "既に接続済み", "status": tello.get_status()}
 
@@ -227,10 +258,15 @@ async def connect_tello(req: ConnectRequest):
 
     success = tello.connect()
     if success:
-        # テレメトリ受信も開始
+        # テレメトリ受信開始
         state_recv: TelloStateReceiver = app_state['state_receiver']
         state_recv.local_ip = tello.local_ip
         state_recv.start()
+
+        # フライトログセッション開始
+        if fl:
+            fl.start_session()
+            fl.log_event("Connected to Tello")
 
     return {
         "success": success,
@@ -243,6 +279,12 @@ async def connect_tello(req: ConnectRequest):
 async def disconnect_tello():
     """Telloから切断"""
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
+
+    # フライトログ記録終了
+    if fl:
+        fl.log_event("Disconnected from Tello")
+        fl.stop_session()
 
     # LineTrace停止
     app_state['linetrace'].active = False
@@ -290,28 +332,41 @@ async def get_network_interfaces():
 @app.post("/api/takeoff")
 async def takeoff():
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
     if not tello.is_connected:
         raise HTTPException(400, "未接続")
+    if fl:
+        fl.log_event("Takeoff requested")
     success = tello.takeoff()
+    if fl and success:
+        fl.log_event("Takeoff success")
     return {"success": success}
 
 
 @app.post("/api/land")
 async def land():
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
     if not tello.is_connected:
         raise HTTPException(400, "未接続")
     app_state['linetrace'].active = False
+    if fl:
+        fl.log_event("Land requested")
     success = tello.land()
+    if fl and success:
+        fl.log_event("Land success")
     return {"success": success}
 
 
 @app.post("/api/emergency")
 async def emergency():
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
     if not tello.is_connected:
         raise HTTPException(400, "未接続")
     app_state['linetrace'].active = False
+    if fl:
+        fl.log_event("EMERGENCY STOP")
     success = tello.emergency()
     return {"success": success}
 
@@ -319,8 +374,11 @@ async def emergency():
 @app.post("/api/move")
 async def move(req: MoveRequest):
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
     if not tello.is_flying:
         raise HTTPException(400, "飛行中ではありません")
+    if fl:
+        fl.log_event(f"Move: {req.direction} {req.distance}cm")
     success = tello.move(req.direction, req.distance)
     return {"success": success}
 
@@ -328,8 +386,11 @@ async def move(req: MoveRequest):
 @app.post("/api/rotate")
 async def rotate(req: RotateRequest):
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
     if not tello.is_flying:
         raise HTTPException(400, "飛行中ではありません")
+    if fl:
+        fl.log_event(f"Rotate: {req.direction} {req.angle}deg")
     success = tello.rotate(req.direction, req.angle)
     return {"success": success}
 
@@ -337,9 +398,12 @@ async def rotate(req: RotateRequest):
 @app.post("/api/rc")
 async def rc_control(req: RCRequest):
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
     if not tello.is_connected:
         raise HTTPException(400, "未接続")
     tello.set_rc(req.lr, req.fb, req.ud, req.yaw)
+    if fl:
+        fl.update_rc(req.lr, req.fb, req.ud, req.yaw, mode="manual")
     if any([req.lr, req.fb, req.ud, req.yaw]):
         if not tello.rc_active:
             tello.start_rc()
@@ -350,7 +414,7 @@ async def rc_control(req: RCRequest):
 
 
 # =========================================================================
-# 映像 API
+# 映像 API & 静止画撮影
 # =========================================================================
 
 @app.post("/api/video/start")
@@ -386,6 +450,36 @@ async def set_video_quality(req: VideoQualityRequest):
     return {"success": True}
 
 
+@app.get("/api/screenshot")
+async def get_screenshot():
+    """最新フレームから静止画(PNG)を生成しダウンロード"""
+    video: TelloVideoReceiver = app_state.get('video')
+    if not video or not video.streaming:
+        raise HTTPException(400, "映像ストリーミングが開始されていません")
+    frame = video.get_frame()
+    if frame is None or frame.size == 0:
+        raise HTTPException(400, "フレームを取得できませんでした")
+
+    ok, png_data = cv2.imencode('.png', frame)
+    if not ok:
+        raise HTTPException(500, "PNGエンコードに失敗しました")
+
+    now_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    filename = f"TELLO_{now_str}.png"
+
+    fl: FlightLogger = app_state.get('logger')
+    if fl:
+        fl.log_event(f"Screenshot taken: {filename}")
+
+    return Response(
+        content=png_data.tobytes(),
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
 @app.get("/video_stream")
 async def video_stream():
     """MJPEG映像ストリーム"""
@@ -397,16 +491,13 @@ async def video_stream():
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
-import cv2
-import numpy as np
 
 def generate_linetrace_mjpeg():
     import time
     video: TelloVideoReceiver = app_state['video']
     lt: LineTraceEngine = app_state['linetrace']
     
-    # プレースホルダーの黒画像
-    blank_frame = np.zeros((112, 480, 3), dtype=np.uint8)
+    blank_frame = np.zeros((180, 480, 3), dtype=np.uint8)
     
     while video.streaming:
         try:
@@ -424,9 +515,12 @@ def generate_linetrace_mjpeg():
                 )
                 time.sleep(0.05)
                 continue
+        except GeneratorExit:
+            break
         except Exception as e:
             logger.debug(f"linetrace_mjpeg encode error: {e}")
         time.sleep(0.05)
+
 
 @app.get("/linetrace_stream")
 async def linetrace_stream():
@@ -448,9 +542,14 @@ async def linetrace_stream():
 async def start_linetrace():
     lt: LineTraceEngine = app_state['linetrace']
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
+
     if not tello.is_flying:
         raise HTTPException(400, "飛行中ではありません")
     lt.active = True
+
+    if fl:
+        fl.log_event("LineTrace started")
 
     # RC制御開始
     if not tello.rc_active:
@@ -463,8 +562,14 @@ async def start_linetrace():
 async def stop_linetrace():
     lt: LineTraceEngine = app_state['linetrace']
     tello: TelloUDPController = app_state['tello']
+    fl: FlightLogger = app_state['logger']
+
     lt.active = False
     tello.set_rc(0, 0, 0, 0)
+    if fl:
+        fl.log_event("LineTrace stopped")
+        fl.update_rc(0, 0, 0, 0, mode="manual")
+
     return {"success": True, "message": "LineTrace停止"}
 
 
@@ -495,6 +600,50 @@ async def get_linetrace_status():
         "params": lt.get_params(),
         "result": lt.get_last_result_info(),
     }
+
+
+# =========================================================================
+# フライトログ (Timeline CSV) API
+# =========================================================================
+
+@app.get("/api/logs")
+async def list_logs():
+    """保存されたフライトログ一覧を返す"""
+    fl: FlightLogger = app_state.get('logger')
+    if not fl:
+        return {"logs": []}
+    return {"logs": fl.list_logs()}
+
+
+@app.get("/api/logs/latest")
+async def download_latest_log():
+    """最新セッションのフライトログCSVをダウンロード"""
+    fl: FlightLogger = app_state.get('logger')
+    if not fl:
+        raise HTTPException(404, "ロガーが利用できません")
+    path = fl.get_latest_log_path()
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "ログファイルが見つかりません")
+    filename = os.path.basename(path)
+    return FileResponse(path=path, media_type="text/csv", filename=filename)
+
+
+@app.get("/api/logs/{filename}")
+async def download_log(filename: str):
+    """指定されたフライトログCSVをダウンロード (パストラバーサル防止)"""
+    safe_filename = os.path.basename(filename)
+    import re
+    # 厳格なファイル名パターンチェック (TELLO_YYYY-MM-DD-HH-mm-ss.csv のみ許可)
+    if not re.match(r"^TELLO_\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.csv$", safe_filename):
+        raise HTTPException(400, "無効なログファイル名フォーマットです")
+
+    fl: FlightLogger = app_state.get('logger')
+    if not fl:
+        raise HTTPException(404, "ロガーが利用できません")
+    filepath = os.path.join(fl.log_dir, safe_filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(404, f"指定のログファイルが存在しません: {safe_filename}")
+    return FileResponse(path=filepath, media_type="text/csv", filename=safe_filename)
 
 
 # =========================================================================

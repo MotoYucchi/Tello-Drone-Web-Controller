@@ -155,6 +155,19 @@ class TelloUDPController:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.settimeout(10.0)
 
+            # ポート再利用を許可 (再接続時のポートバインド競合を回避)
+            try:
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            except Exception:
+                pass
+
+            # Windows特有のWSAECONNRESET (10054: ICMP Port Unreachable) による受信スレッド停止を抑制
+            if hasattr(socket, 'SIO_UDP_CONNRESET'):
+                try:
+                    self.sock.ioctl(socket.SIO_UDP_CONNRESET, False)
+                except Exception:
+                    pass
+
             # WiFi側インターフェースにバインド
             self.sock.bind((bind_addr, self.TELLO_PORT))
 
@@ -319,14 +332,21 @@ class TelloUDPController:
                     self._response = resp
                     self._response_event.set()
 
-            except socket.timeout:
+            except ConnectionResetError:
+                # Windows特有のWSAECONNRESET: Tello未応答やICMP到達不能でもソケットは正常なので継続
+                time.sleep(0.01)
                 continue
-            except OSError:
-                # ソケットが閉じられた
-                break
+            except (socket.timeout, TimeoutError):
+                continue
+            except OSError as e:
+                # 明示的にクローズされた場合のみ終了
+                if not self._recv_running or not self.sock:
+                    break
+                logger.debug(f"受信ソケットOSエラー(継続試行): {e}")
+                time.sleep(0.05)
             except Exception as e:
                 if self._recv_running:
-                    logger.error(f"受信エラー: {e}")
+                    logger.error(f"受信ループ例外: {e}")
                 time.sleep(0.1)
 
         logger.info("受信スレッド終了")

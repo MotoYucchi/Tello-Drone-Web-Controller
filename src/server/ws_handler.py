@@ -2,7 +2,7 @@
 WebSocket Handler — リアルタイム制御＆テレメトリ
 
 WebSocket経由でキーボード入力、RC制御、テレメトリ配信を行う。
-LineTraceの結果もリアルタイムで配信。
+LineTraceの結果やフライトログ連携もリアルタイムで処理。
 """
 
 import asyncio
@@ -137,6 +137,7 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """制御メッセージを処理"""
     try:
         msg_type = msg.get('type')
+        fl = _app_state.get('logger')
 
         if msg_type == 'connect':
             tello = _app_state['tello']
@@ -149,6 +150,9 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 state_recv.local_ip = tello.local_ip
                 state_recv.start()
                 _app_state['qr'].clear_links()
+                if fl:
+                    fl.start_session()
+                    fl.log_event("Connected via WS")
             return {
                 'type': 'connect_response',
                 'success': success,
@@ -163,6 +167,9 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 await asyncio.to_thread(tello.stream_off)
                 video.stop()
             _app_state['state_receiver'].stop()
+            if fl:
+                fl.log_event("Disconnected via WS")
+                fl.stop_session()
             success = await asyncio.to_thread(tello.disconnect)
             return {'type': 'disconnect_response', 'success': success}
 
@@ -176,6 +183,9 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             ud = msg.get('ud', 0)
             yaw = msg.get('yaw', 0)
             tello.set_rc(lr, fb, ud, yaw)
+            if fl:
+                fl.update_rc(lr, fb, ud, yaw, mode="manual")
+
             if any([lr, fb, ud, yaw]):
                 if not tello.rc_active:
                     tello.start_rc()
@@ -186,18 +196,30 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         elif msg_type == 'takeoff':
             tello = _app_state['tello']
+            if fl:
+                fl.log_event("Takeoff requested via WS")
             success = await asyncio.to_thread(tello.takeoff)
+            if fl and success:
+                fl.log_event("Takeoff success")
             return {'type': 'takeoff_response', 'success': success}
 
         elif msg_type == 'land':
             tello = _app_state['tello']
             _app_state['linetrace'].active = False
+            if fl:
+                fl.log_event("Land requested via WS")
             success = await asyncio.to_thread(tello.land)
+            if fl and success:
+                fl.log_event("Land success")
+                fl.update_rc(0, 0, 0, 0, mode="idle")
             return {'type': 'land_response', 'success': success}
 
         elif msg_type == 'emergency':
             tello = _app_state['tello']
             _app_state['linetrace'].active = False
+            if fl:
+                fl.log_event("EMERGENCY via WS")
+                fl.update_rc(0, 0, 0, 0, mode="idle")
             success = await asyncio.to_thread(tello.emergency)
             return {'type': 'emergency_response', 'success': success}
 
@@ -225,16 +247,21 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             tello = _app_state['tello']
             if tello.is_flying:
                 lt.active = True
+                if fl:
+                    fl.log_event("LineTrace started via WS")
                 if not tello.rc_active:
                     tello.start_rc()
                 return {'type': 'linetrace_response', 'success': True}
-            return {'type': 'linetrace_response', 'success': False}
+            return {'type': 'linetrace_response', 'success': False, 'message': '飛行中のみLineTrace可能です'}
 
         elif msg_type == 'linetrace_stop':
             lt = _app_state['linetrace']
             tello = _app_state['tello']
             lt.active = False
             tello.set_rc(0, 0, 0, 0)
+            if fl:
+                fl.log_event("LineTrace stopped via WS")
+                fl.update_rc(0, 0, 0, 0, mode="manual")
             return {'type': 'linetrace_response', 'success': True}
 
         elif msg_type == 'linetrace_preset':
@@ -261,8 +288,9 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 return {'type': 'qr_response', 'success': False, 'message': 'フレームなし'}
             result = qr.process_detection(frame)
             
-            # If a new QR code was stored via manual scan, send it to Pashatoku
             if result.get('success') and result.get('newly_stored'):
+                if fl:
+                    fl.log_event(f"Manual QR Scanned: {result.get('qr_text')}")
                 try:
                     import urllib.request
                     url = "http://192.168.10.39:8080/api/qr/receive"
@@ -277,7 +305,6 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     }
                     data = qr_text.encode('utf-8')
                     req = urllib.request.Request(url, data=data, headers=headers, method='POST')
-                    # Run synchronously but non-blocking using asyncio.to_thread
                     asyncio.create_task(asyncio.to_thread(urllib.request.urlopen, req, timeout=3.0))
                 except Exception as e:
                     logger.error(f"Pashatoku送信設定エラー (Manual Scan): {e}")
@@ -296,25 +323,31 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 async def _handle_keyboard(msg: Dict[str, Any]) -> Dict[str, Any]:
     """キーボード操作処理"""
     tello = _app_state['tello']
+    fl = _app_state.get('logger')
     action = msg.get('action')  # press, release, single
     key = msg.get('key', '')
 
     # 単発キー
     if action == 'single':
         if key == 't':
+            if fl:
+                fl.log_event("Takeoff via Key 'T'")
             success = await asyncio.to_thread(tello.takeoff)
             return {'type': 'keyboard_response', 'success': success, 'action': 'takeoff'}
         elif key == 'l':
             _app_state['linetrace'].active = False
+            if fl:
+                fl.log_event("Land via Key 'L'")
             success = await asyncio.to_thread(tello.land)
             return {'type': 'keyboard_response', 'success': success, 'action': 'land'}
         elif key == 'space':
             _app_state['linetrace'].active = False
+            if fl:
+                fl.log_event("EMERGENCY via Space")
             success = await asyncio.to_thread(tello.emergency)
             return {'type': 'keyboard_response', 'success': success, 'action': 'emergency'}
 
     # RC制御キー（press/release で連続制御）
-    # キー状態管理
     if not hasattr(_handle_keyboard, '_keys'):
         _handle_keyboard._keys = {}
 
@@ -350,6 +383,8 @@ async def _handle_keyboard(msg: Dict[str, Any]) -> Dict[str, Any]:
         yaw = rot_speed
 
     tello.set_rc(lr, fb, ud, yaw)
+    if fl:
+        fl.update_rc(lr, fb, ud, yaw, mode="manual")
 
     if any([lr, fb, ud, yaw]):
         if not tello.rc_active:

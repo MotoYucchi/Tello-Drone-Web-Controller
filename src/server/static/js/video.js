@@ -1,5 +1,5 @@
 /**
- * video.js — 映像管理
+ * video.js — 映像管理＆静止画撮影
  */
 
 const VideoManager = {
@@ -36,7 +36,7 @@ const VideoManager = {
         App.videoStreaming = false;
         
         const toggle = document.getElementById('toggleVideoMode');
-        if(toggle) toggle.checked = false;
+        if (toggle) toggle.checked = false;
     },
 
     toggleMode(isLineTrace) {
@@ -48,13 +48,53 @@ const VideoManager = {
         }
     },
 
-    screenshot() {
-        if (!this.streamImg || !this.streamImg.src) {
-            App.notify('映像がありません', 'warning');
+    async screenshot() {
+        if (!App.videoStreaming && (!this.streamImg || !this.streamImg.src)) {
+            App.notify('映像ストリーミングが開始されていません', 'warning');
             return;
         }
 
-        // 画像をCanvasにコピーしてダウンロード
+        try {
+            // バックエンドAPIから高画質PNGを直接ダウンロード
+            const resp = await fetch('/api/screenshot');
+            if (resp.ok) {
+                const blob = await resp.blob();
+                const disposition = resp.headers.get('Content-Disposition');
+                let filename = '';
+                if (disposition && disposition.indexOf('filename=') !== -1) {
+                    const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+                    if (matches != null && matches[1]) {
+                        filename = matches[1].replace(/['"]/g, '');
+                    }
+                }
+                if (!filename) {
+                    const d = new Date();
+                    const pad = (n) => String(n).padStart(2, '0');
+                    const ts = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+                    filename = `TELLO_${ts}.png`;
+                }
+
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                App.notify(`静止画を保存しました (${filename})`, 'success');
+                return;
+            }
+        } catch (e) {
+            console.warn('API経由のスクリーンショット失敗、Canvasフォールバックを実行:', e);
+        }
+
+        // フォールバック: CanvasからPNGとして保存
+        if (!this.streamImg || !this.streamImg.naturalWidth) {
+            App.notify('静止画キャプチャに失敗しました', 'error');
+            return;
+        }
+
         const canvas = document.createElement('canvas');
         canvas.width = this.streamImg.naturalWidth || 640;
         canvas.height = this.streamImg.naturalHeight || 480;
@@ -63,14 +103,21 @@ const VideoManager = {
 
         canvas.toBlob((blob) => {
             if (!blob) return;
+            const d = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            const ts = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+            const filename = `TELLO_${ts}.png`;
+
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `tello_${new Date().toISOString().replace(/[:.]/g, '-')}.jpg`;
+            a.download = filename;
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            App.notify('スクリーンショットを保存しました', 'success');
-        }, 'image/jpeg', 0.95);
+            App.notify(`静止画を保存しました (${filename})`, 'success');
+        }, 'image/png');
     },
 };
 

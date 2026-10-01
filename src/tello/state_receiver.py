@@ -35,6 +35,20 @@ class TelloStateReceiver:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sock.settimeout(3.0)
+
+            # ポート再利用
+            try:
+                self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            except Exception:
+                pass
+
+            # Windows特有のWSAECONNRESET防止
+            if hasattr(socket, 'SIO_UDP_CONNRESET'):
+                try:
+                    self.sock.ioctl(socket.SIO_UDP_CONNRESET, False)
+                except Exception:
+                    pass
+
             self.sock.bind((self.local_ip, self.STATE_PORT))
 
             self._running = True
@@ -46,6 +60,12 @@ class TelloStateReceiver:
             return True
         except Exception as e:
             logger.error(f"テレメトリ受信開始エラー: {e}")
+            if self.sock:
+                try:
+                    self.sock.close()
+                except Exception:
+                    pass
+                self.sock = None
             return False
 
     def stop(self) -> None:
@@ -68,10 +88,15 @@ class TelloStateReceiver:
                 data, addr = self.sock.recvfrom(1024)
                 state_str = data.decode('utf-8').strip()
                 self._parse_state(state_str)
-            except socket.timeout:
+            except ConnectionResetError:
+                time.sleep(0.01)
+                continue
+            except (socket.timeout, TimeoutError):
                 continue
             except OSError:
-                break
+                if not self._running or not self.sock:
+                    break
+                time.sleep(0.05)
             except Exception as e:
                 if self._running:
                     logger.error(f"テレメトリ受信エラー: {e}")

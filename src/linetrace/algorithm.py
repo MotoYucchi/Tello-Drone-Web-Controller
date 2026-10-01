@@ -73,11 +73,20 @@ class LineTraceAlgorithm:
             roi = resized[roi_top:roi_bottom, :]
             roi_h, roi_w = roi.shape[:2]
 
-            # 3. ガウシアンフィルター平滑化
+            # ROIが極端に小さい場合のクラッシュ防止ガード
+            if roi.size == 0 or roi_h < 10 or roi_w < 10:
+                return False, result_info, None
+
+            # 3. ガウシアンフィルター平滑化 (OpenCVクラッシュ防止: 正の奇数かつROI寸法未満を厳守)
             ksize = getattr(params, 'gaussian_ksize', 5)
+            if not isinstance(ksize, int) or ksize < 1:
+                ksize = 5
             if ksize % 2 == 0:
                 ksize += 1
-            ksize = max(1, min(ksize, 31))
+            max_k = min(roi_h, roi_w)
+            if max_k % 2 == 0:
+                max_k -= 1
+            ksize = max(1, min(ksize, max(1, max_k)))
             blurred = cv2.GaussianBlur(roi, (ksize, ksize), 0)
 
             # 4. HSV色空間変換 & 二値化マスク
@@ -185,18 +194,23 @@ class LineTraceAlgorithm:
             for seg in valid_segments:
                 if seg is anchor:
                     continue
-                # 角度差
+                # 角度差 (約60°〜120° で直交)
                 diff_angle = abs(seg['angle'] - anchor['angle'])
                 if diff_angle > 180:
                     diff_angle = 360 - diff_angle
 
-                # 水平に近い線分 (|angle| > 50°) で、アンカーの先端(top)または中央付近にある
-                if 55 <= diff_angle <= 125 and abs(seg['angle']) > 45:
-                    dist_to_anchor_top = math.hypot(seg['mid_x'] - anchor['p2'][0], seg['mid_y'] - anchor['p2'][1])
-                    if dist_to_anchor_top < (roi_h * 0.5):
+                # 水平に近い線分 (|angle| > 40°)
+                if 50 <= diff_angle <= 130 and abs(seg['angle']) > 40:
+                    # アンカー先端(p2)と候補線分の端点(p1またはp2)の最小距離
+                    d1 = math.hypot(seg['p1'][0] - anchor['p2'][0], seg['p1'][1] - anchor['p2'][1])
+                    d2 = math.hypot(seg['p2'][0] - anchor['p2'][0], seg['p2'][1] - anchor['p2'][1])
+                    min_endpoint_dist = min(d1, d2)
+
+                    # 端点がアンカー先端付近 (ROI高さの40%以内) にあればコーナーと判定
+                    if min_endpoint_dist < (roi_h * 0.40):
                         is_corner = True
                         corner_angle = seg['angle']
-                        # コーナーの方向 (アンカー先端に対して右にあるか左にあるか)
+                        # コーナーの方向 (アンカー先端に対して線分全体が右か左か)
                         corner_dir = 'right' if seg['mid_x'] > anchor['p2'][0] else 'left'
                         break
 
@@ -218,15 +232,25 @@ class LineTraceAlgorithm:
 
             # 重み付け平均ターゲット
             total_len = sum(s['length'] for s in connected_segs)
-            if total_len > 0:
+            if total_len > 1e-4 and not math.isnan(total_len):
                 target_x = sum(s['mid_x'] * s['length'] for s in connected_segs) / total_len
                 target_y = sum(s['mid_y'] * s['length'] for s in connected_segs) / total_len
-                # 角度はドローン直近から前方にかけての変化を加味
                 target_angle = sum(s['angle'] * s['length'] for s in connected_segs) / total_len
             else:
                 target_x = anchor['mid_x']
                 target_y = anchor['mid_y']
                 target_angle = anchor['angle']
+
+            # NaN / Inf 安全ガード
+            if math.isnan(target_x) or math.isinf(target_x):
+                target_x = frame_cx
+            if math.isnan(target_y) or math.isinf(target_y):
+                target_y = float(roi_h) / 2.0
+            if math.isnan(target_angle) or math.isinf(target_angle):
+                target_angle = 0.0
+
+            target_x = max(0.0, min(float(roi_w), target_x))
+            target_y = max(0.0, min(float(roi_h), target_y))
 
             offset_dx = target_x - frame_cx
 
@@ -241,26 +265,26 @@ class LineTraceAlgorithm:
             # 9. 機体タイプ別のRC制御値算出
             LineTraceAlgorithm._calc_rc_controls(result_info, params, is_downward, offset_dx, target_angle, is_corner, corner_dir)
 
-            # 10. デバッグ画面描画
+            # 10. デバッグ画面描画 (安全クリッピング付き)
             # 検出されたすべての線分を細いグレーで描画
             for seg in valid_segments:
-                p1 = (int(seg['p1'][0]), int(seg['p1'][1]))
-                p2 = (int(seg['p2'][0]), int(seg['p2'][1]))
+                p1 = (int(np.clip(seg['p1'][0], -100, roi_w + 100)), int(np.clip(seg['p1'][1], -100, roi_h + 100)))
+                p2 = (int(np.clip(seg['p2'][0], -100, roi_w + 100)), int(np.clip(seg['p2'][1], -100, roi_h + 100)))
                 cv2.line(debug, p1, p2, (100, 100, 100), 1)
 
             # 追跡対象の線分を緑太線で描画
             for seg in connected_segs:
-                p1 = (int(seg['p1'][0]), int(seg['p1'][1]))
-                p2 = (int(seg['p2'][0]), int(seg['p2'][1]))
+                p1 = (int(np.clip(seg['p1'][0], -100, roi_w + 100)), int(np.clip(seg['p1'][1], -100, roi_h + 100)))
+                p2 = (int(np.clip(seg['p2'][0], -100, roi_w + 100)), int(np.clip(seg['p2'][1], -100, roi_h + 100)))
                 cv2.line(debug, p1, p2, (0, 255, 0), 3)
 
             # アンカー線分はシアンで強調
-            p1_a = (int(anchor['p1'][0]), int(anchor['p1'][1]))
-            p2_a = (int(anchor['p2'][0]), int(anchor['p2'][1]))
+            p1_a = (int(np.clip(anchor['p1'][0], -100, roi_w + 100)), int(np.clip(anchor['p1'][1], -100, roi_h + 100)))
+            p2_a = (int(np.clip(anchor['p2'][0], -100, roi_w + 100)), int(np.clip(anchor['p2'][1], -100, roi_h + 100)))
             cv2.line(debug, p1_a, p2_a, (255, 255, 0), 3)
 
             # ターゲット位置
-            tx, ty = int(target_x), int(target_y)
+            tx, ty = int(np.clip(target_x, 0, roi_w - 1)), int(np.clip(target_y, 0, roi_h - 1))
             cv2.drawMarker(debug, (tx, ty), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
 
             # 画面中心基準線
@@ -269,8 +293,8 @@ class LineTraceAlgorithm:
             # 制御ベクトル矢印
             rad = math.radians(target_angle)
             arrow_len = 40
-            ax = int(tx + arrow_len * math.sin(rad))
-            ay = int(ty - arrow_len * math.cos(rad))
+            ax = int(np.clip(tx + arrow_len * math.sin(rad), -500, roi_w + 500))
+            ay = int(np.clip(ty - arrow_len * math.cos(rad), -500, roi_h + 500))
             cv2.arrowedLine(debug, (tx, ty), (ax, ay), (0, 165, 255), 2)
 
             # ステータス情報テキスト描画

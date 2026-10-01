@@ -116,6 +116,9 @@
                 <div class="card-header">
                     <span class="icon"><i class="fas fa-plane-departure"></i></span>
                     飛行制御
+                    <button class="btn btn-sm" id="btnDownloadFlightLog" style="margin-left: auto;" title="最新の飛行ログ(Timeline CSV)をダウンロード">
+                        <i class="fas fa-file-csv"></i> 飛行ログCSV
+                    </button>
                 </div>
                 <div class="card-body">
                     <div class="flight-buttons">
@@ -167,7 +170,7 @@
             <div class="card" id="panel-linetrace">
                 <div class="card-header">
                     <span class="icon"><i class="fas fa-route"></i></span>
-                    LineTrace
+                    LineTrace (LSD)
                     <div style="margin-left: auto;">
                         <label class="toggle-switch">
                             <input type="checkbox" id="toggleLineTrace">
@@ -177,6 +180,15 @@
                 </div>
                 <div class="card-body">
                     <div class="linetrace-controls">
+                        <!-- Camera Mode Selector -->
+                        <div class="mb-sm">
+                            <div class="text-xs text-muted mb-xs">機体カメラタイプ</div>
+                            <select id="ltCameraMode" class="text-input" style="width: 100%; padding: 6px 10px; background: rgba(255,255,255,0.08); color: #fff; border: 1px solid var(--border-glass); border-radius: var(--border-radius-sm);">
+                                <option value="standard" selected>通常機体 (前方微下向きカメラ)</option>
+                                <option value="downward">改造機体 (ほぼ真下カメラ)</option>
+                            </select>
+                        </div>
+
                         <!-- Color Presets -->
                         <div>
                             <div class="text-xs text-muted mb-sm">色プリセット</div>
@@ -196,9 +208,14 @@
                             </div>
                         </div>
 
-                        <!-- HSV Sliders -->
+                        <!-- HSV & Preprocess Sliders -->
                         <div class="slider-group">
-                            <div class="text-xs text-muted mb-sm">HSV フィルター</div>
+                            <div class="text-xs text-muted mb-sm">フィルター設定</div>
+                            <div class="slider-row">
+                                <label>平滑化(G)</label>
+                                <input type="range" id="ltGaussian" min="1" max="15" step="2" value="5">
+                                <span class="slider-value" id="ltGaussianVal">5</span>
+                            </div>
                             <div class="slider-row">
                                 <label>H min</label>
                                 <input type="range" id="ltHMin" min="0" max="179" value="0">
@@ -235,8 +252,8 @@
                         <div class="slider-group">
                             <div class="slider-row">
                                 <label>速度</label>
-                                <input type="range" id="ltSpeed" min="0" max="100" value="10">
-                                <span class="slider-value" id="ltSpeedVal">10</span>
+                                <input type="range" id="ltSpeed" min="0" max="100" value="15">
+                                <span class="slider-value" id="ltSpeedVal">15</span>
                             </div>
                         </div>
 

@@ -34,6 +34,7 @@ const App = {
     // =========================================================================
     notify(message, type = 'info', duration = 3000) {
         const area = document.getElementById('notificationArea');
+        if (!area) return;
         const el = document.createElement('div');
         el.className = `notification ${type}`;
         el.textContent = message;
@@ -55,7 +56,8 @@ const App = {
         this.ws = new WebSocket(`${base}/control`);
         this.ws.onopen = () => {
             console.log('WS control connected');
-            document.getElementById('footerWsStatus').textContent = '接続';
+            const wsStatus = document.getElementById('footerWsStatus');
+            if (wsStatus) wsStatus.textContent = '接続';
             
             // 接続時にPashatoku設定を送信
             const userInp = document.getElementById('qrUserName');
@@ -67,7 +69,8 @@ const App = {
         this.ws.onmessage = (e) => this._handleWSMessage(JSON.parse(e.data));
         this.ws.onclose = () => {
             console.log('WS control disconnected');
-            document.getElementById('footerWsStatus').textContent = '切断';
+            const wsStatus = document.getElementById('footerWsStatus');
+            if (wsStatus) wsStatus.textContent = '切断';
             // 自動再接続
             setTimeout(() => this.connectWS(), 3000);
         };
@@ -103,7 +106,10 @@ const App = {
             this.connected = false;
             this.flying = false;
             this._updateConnectionUI(false);
-            this.notify('Tello から切断しました', 'info');
+            this._resetTelemetryUI();
+            this.notify('Tello から切断しました（ステータスをリセット）', 'info');
+            // 切断時にネットワークインターフェースを自動再検出
+            this.loadInterfaces();
         } else if (type === 'takeoff_response') {
             if (msg.success) {
                 this.flying = true;
@@ -129,6 +135,10 @@ const App = {
             if (typeof LineTraceUI !== 'undefined') {
                 LineTraceUI.updateSliders(msg.params);
             }
+        } else if (type === 'linetrace_response') {
+            if (msg.message) {
+                this.notify(msg.message, msg.success ? 'info' : 'warning');
+            }
         } else if (type === 'qr_response') {
             QRManager.handleResult(msg);
         } else if (type === 'error') {
@@ -144,26 +154,35 @@ const App = {
         const video = msg.video || {};
         const lt = msg.linetrace_result || {};
 
-        // Update status values
         this.connected = tello.connected || false;
         this.flying = tello.flying || false;
 
-        const bat = telemetry.battery || tello.battery || 0;
-        const height = telemetry.height || tello.height || 0;
-        const temp = telemetry.temp_high || tello.temperature || 0;
-        const flightTime = telemetry.flight_time || tello.flight_time || 0;
+        if (this.connected) {
+            const bat = telemetry.battery || tello.battery || 0;
+            const height = telemetry.height || tello.height || 0;
+            const temp = telemetry.temp_high || tello.temperature || 0;
+            const flightTime = telemetry.flight_time || tello.flight_time || 0;
 
-        document.getElementById('valBattery').textContent = `${bat}%`;
-        document.getElementById('valHeight').textContent = `${height}cm`;
-        document.getElementById('valTemp').textContent = `${temp}°C`;
-        document.getElementById('valTime').textContent = `${flightTime}s`;
-        document.getElementById('footerFps').textContent = video.fps || 0;
-        document.getElementById('footerLocalIp').textContent = tello.local_ip || '--';
+            const elBat = document.getElementById('valBattery');
+            const elHeight = document.getElementById('valHeight');
+            const elTemp = document.getElementById('valTemp');
+            const elTime = document.getElementById('valTime');
+            const elFps = document.getElementById('footerFps');
+            const elIp = document.getElementById('footerLocalIp');
 
-        // LineTrace detection status
-        if (lt.detected !== undefined) {
-            document.getElementById('ltDetected').textContent =
-                lt.detected ? `検出中 (area: ${lt.area})` : '未検出';
+            if (elBat) elBat.textContent = `${bat}%`;
+            if (elHeight) elHeight.textContent = `${height}cm`;
+            if (elTemp) elTemp.textContent = `${temp}°C`;
+            if (elTime) elTime.textContent = `${flightTime}s`;
+            if (elFps) elFps.textContent = video.fps || 0;
+            if (elIp) elIp.textContent = tello.local_ip || '--';
+
+            // LineTrace結果の更新 (LSD詳細表示)
+            if (typeof LineTraceUI !== 'undefined' && lt.detected !== undefined) {
+                LineTraceUI.updateResultInfo(lt);
+            }
+        } else {
+            this._resetTelemetryUI();
         }
 
         this._updateConnectionUI(this.connected);
@@ -173,14 +192,51 @@ const App = {
         if (!status) return;
         this.connected = status.connected;
         this.flying = status.flying;
-        document.getElementById('valBattery').textContent = `${status.battery || 0}%`;
-        document.getElementById('valHeight').textContent = `${status.height || 0}cm`;
-        document.getElementById('valTemp').textContent = `${status.temperature || 0}°C`;
-        document.getElementById('valTime').textContent = `${status.flight_time || 0}s`;
-        if (status.local_ip) {
-            document.getElementById('footerLocalIp').textContent = status.local_ip;
+
+        if (this.connected) {
+            const elBat = document.getElementById('valBattery');
+            const elHeight = document.getElementById('valHeight');
+            const elTemp = document.getElementById('valTemp');
+            const elTime = document.getElementById('valTime');
+            const elIp = document.getElementById('footerLocalIp');
+
+            if (elBat) elBat.textContent = `${status.battery || 0}%`;
+            if (elHeight) elHeight.textContent = `${status.height || 0}cm`;
+            if (elTemp) elTemp.textContent = `${status.temperature || 0}°C`;
+            if (elTime) elTime.textContent = `${status.flight_time || 0}s`;
+            if (elIp && status.local_ip) elIp.textContent = status.local_ip;
+        } else {
+            this._resetTelemetryUI();
         }
+
         this._updateConnectionUI(status.connected);
+    },
+
+    /**
+     * 切断時にテレメトリ表示のみをリセット（スライダーやQR履歴は保持）
+     */
+    _resetTelemetryUI() {
+        const elBat = document.getElementById('valBattery');
+        const elHeight = document.getElementById('valHeight');
+        const elTemp = document.getElementById('valTemp');
+        const elTime = document.getElementById('valTime');
+        const elFps = document.getElementById('footerFps');
+        const elIp = document.getElementById('footerLocalIp');
+        const elLt = document.getElementById('ltDetected');
+
+        if (elBat) elBat.textContent = '--%';
+        if (elHeight) elHeight.textContent = '--cm';
+        if (elTemp) elTemp.textContent = '--°C';
+        if (elTime) elTime.textContent = '--s';
+        if (elFps) elFps.textContent = '0';
+        if (elIp) elIp.textContent = '--';
+        if (elLt) {
+            elLt.textContent = '--';
+            elLt.style.color = 'var(--text-muted)';
+        }
+
+        // 映像ストリームもリセット
+        VideoManager.hideStream();
     },
 
     _updateConnectionUI(connected) {
@@ -189,13 +245,13 @@ const App = {
         const btn = document.getElementById('btnConnect');
 
         if (connected) {
-            dot.classList.add('connected');
-            text.textContent = '接続中';
-            btn.innerHTML = '<i class="fas fa-plug"></i><span>切断</span>';
+            if (dot) dot.classList.add('connected');
+            if (text) text.textContent = '接続中';
+            if (btn) btn.innerHTML = '<i class="fas fa-plug"></i><span>切断</span>';
         } else {
-            dot.classList.remove('connected');
-            text.textContent = '切断中';
-            btn.innerHTML = '<i class="fas fa-plug"></i><span>接続</span>';
+            if (dot) dot.classList.remove('connected');
+            if (text) text.textContent = '切断中';
+            if (btn) btn.innerHTML = '<i class="fas fa-plug"></i><span>接続</span>';
         }
     },
 
@@ -205,7 +261,9 @@ const App = {
     async loadInterfaces() {
         const result = await this.api('GET', '/network/interfaces');
         const select = document.getElementById('networkInterface');
-        // Clear existing options except first
+        if (!select) return;
+
+        const currentVal = select.value;
         while (select.options.length > 1) select.remove(1);
 
         if (result.interfaces) {
@@ -213,11 +271,49 @@ const App = {
                 const opt = document.createElement('option');
                 opt.value = iface.ip;
                 opt.textContent = `${iface.adapter} (${iface.ip})${iface.is_tello ? ' ★Tello' : ''}`;
-                if (iface.is_tello) opt.selected = true;
+                if (iface.is_tello || iface.ip === currentVal) opt.selected = true;
                 select.add(opt);
             });
         }
     },
+
+    // =========================================================================
+    // フライトログ (Timeline CSV) ダウンロード
+    // =========================================================================
+    async downloadFlightLog() {
+        try {
+            const resp = await fetch('/api/logs/latest');
+            if (!resp.ok) {
+                App.notify('保存されたフライトログがありません', 'warning');
+                return;
+            }
+            const blob = await resp.blob();
+            const disposition = resp.headers.get('Content-Disposition');
+            let filename = '';
+            if (disposition && disposition.indexOf('filename=') !== -1) {
+                const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+                if (matches != null && matches[1]) {
+                    filename = matches[1].replace(/['"]/g, '');
+                }
+            }
+            if (!filename) {
+                filename = `TELLO_flight_${Date.now()}.csv`;
+            }
+
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            App.notify(`フライトログCSVをダウンロードしました (${filename})`, 'success');
+        } catch (e) {
+            console.error('フライトログダウンロードエラー:', e);
+            App.notify('フライトログのダウンロードに失敗しました', 'error');
+        }
+    }
 };
 
 // =========================================================================
@@ -235,8 +331,10 @@ const QRManager = {
 
     handleResult(result) {
         const msgEl = document.getElementById('qrMessage');
-        msgEl.textContent = result.message || '';
-        msgEl.style.display = 'block';
+        if (msgEl) {
+            msgEl.textContent = result.message || '';
+            msgEl.style.display = 'block';
+        }
 
         if (result.newly_stored) {
             App.notify(`QR 保存: ${result.qr_text}`, 'success');
@@ -250,8 +348,9 @@ const QRManager = {
 
     renderLinks(links) {
         const container = document.getElementById('qrLinksList');
+        if (!container) return;
         if (!links || Object.keys(links).length === 0) {
-            container.innerHTML = '<div class="qr-empty"><i class="fas fa-qrcode"></i><p>保存済みリンクはありません</p></div>';
+            container.innerHTML = '<div class="qr-empty"><i class="fas fa-qrcode"></i><p>保存済みデータはありません</p></div>';
             return;
         }
 
@@ -260,7 +359,6 @@ const QRManager = {
             const item = document.createElement('div');
             item.className = 'qr-link-item';
             
-            // Generate link or plain text display
             let contentHTML = '';
             if (data.link) {
                 contentHTML = `<a href="${data.link}" target="_blank" rel="noopener">${data.qr_text}</a>`;
@@ -345,65 +443,109 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // === Buttons ===
-    document.getElementById('btnConnect').addEventListener('click', () => {
-        if (App.connected) {
-            App.wsSend({ type: 'disconnect' });
-        } else {
-            const ip = document.getElementById('networkInterface').value;
-            App.wsSend({ type: 'connect', local_ip: ip });
-        }
-    });
+    const btnConnect = document.getElementById('btnConnect');
+    if (btnConnect) {
+        btnConnect.addEventListener('click', () => {
+            if (App.connected) {
+                App.wsSend({ type: 'disconnect' });
+            } else {
+                const ip = document.getElementById('networkInterface').value;
+                App.wsSend({ type: 'connect', local_ip: ip });
+            }
+        });
+    }
 
-    document.getElementById('btnTakeoff').addEventListener('click', () => {
-        App.wsSend({ type: 'takeoff' });
-    });
+    const btnTakeoff = document.getElementById('btnTakeoff');
+    if (btnTakeoff) {
+        btnTakeoff.addEventListener('click', () => {
+            App.wsSend({ type: 'takeoff' });
+        });
+    }
 
-    document.getElementById('btnLand').addEventListener('click', () => {
-        App.wsSend({ type: 'land' });
-    });
+    const btnLand = document.getElementById('btnLand');
+    if (btnLand) {
+        btnLand.addEventListener('click', () => {
+            App.wsSend({ type: 'land' });
+        });
+    }
 
-    document.getElementById('btnEmergency').addEventListener('click', () => {
-        if (confirm('緊急停止を実行しますか？モーターが即停止します。')) {
-            App.wsSend({ type: 'emergency' });
-        }
-    });
+    const btnEmergency = document.getElementById('btnEmergency');
+    if (btnEmergency) {
+        btnEmergency.addEventListener('click', () => {
+            if (confirm('緊急停止を実行しますか？モーターが即停止します。')) {
+                App.wsSend({ type: 'emergency' });
+            }
+        });
+    }
 
-    document.getElementById('btnVideoStart').addEventListener('click', () => {
-        App.wsSend({ type: 'video_start' });
-    });
+    const btnVideoStart = document.getElementById('btnVideoStart');
+    if (btnVideoStart) {
+        btnVideoStart.addEventListener('click', () => {
+            App.wsSend({ type: 'video_start' });
+        });
+    }
 
-    document.getElementById('btnVideoStop').addEventListener('click', () => {
-        App.wsSend({ type: 'video_stop' });
-        VideoManager.hideStream();
-    });
+    const btnVideoStop = document.getElementById('btnVideoStop');
+    if (btnVideoStop) {
+        btnVideoStop.addEventListener('click', () => {
+            App.wsSend({ type: 'video_stop' });
+            VideoManager.hideStream();
+        });
+    }
 
-    document.getElementById('btnScreenshot').addEventListener('click', () => {
-        VideoManager.screenshot();
-    });
+    const btnScreenshot = document.getElementById('btnScreenshot');
+    if (btnScreenshot) {
+        btnScreenshot.addEventListener('click', () => {
+            VideoManager.screenshot();
+        });
+    }
 
-    document.getElementById('btnQrScan').addEventListener('click', () => {
-        QRManager.scan();
-    });
+    const btnFlightLog = document.getElementById('btnDownloadFlightLog');
+    if (btnFlightLog) {
+        btnFlightLog.addEventListener('click', () => {
+            App.downloadFlightLog();
+        });
+    }
 
-    document.getElementById('btnQrRefresh').addEventListener('click', () => {
-        QRManager.loadLinks();
-    });
+    const btnQrScan = document.getElementById('btnQrScan');
+    if (btnQrScan) {
+        btnQrScan.addEventListener('click', () => {
+            QRManager.scan();
+        });
+    }
 
-    document.getElementById('btnQrDownload').addEventListener('click', () => {
-        QRManager.downloadCSV();
-    });
+    const btnQrRefresh = document.getElementById('btnQrRefresh');
+    if (btnQrRefresh) {
+        btnQrRefresh.addEventListener('click', () => {
+            QRManager.loadLinks();
+        });
+    }
 
-    document.getElementById('btnRefreshInterfaces').addEventListener('click', () => {
-        App.loadInterfaces();
-    });
+    const btnQrDownload = document.getElementById('btnQrDownload');
+    if (btnQrDownload) {
+        btnQrDownload.addEventListener('click', () => {
+            QRManager.downloadCSV();
+        });
+    }
 
-    document.getElementById('videoQualityPreset').addEventListener('change', (e) => {
-        const presets = {
-            low: { width: 320, height: 240, quality: 50 },
-            medium: { width: 640, height: 480, quality: 80 },
-            high: { width: 960, height: 720, quality: 95 },
-        };
-        const p = presets[e.target.value] || presets.medium;
-        App.api('POST', '/video/quality', p);
-    });
+    const btnRefreshInterfaces = document.getElementById('btnRefreshInterfaces');
+    if (btnRefreshInterfaces) {
+        btnRefreshInterfaces.addEventListener('click', () => {
+            App.loadInterfaces();
+            App.notify('ネットワークインターフェースを再検出しました', 'info');
+        });
+    }
+
+    const videoQualityPreset = document.getElementById('videoQualityPreset');
+    if (videoQualityPreset) {
+        videoQualityPreset.addEventListener('change', (e) => {
+            const presets = {
+                low: { width: 320, height: 240, quality: 50 },
+                medium: { width: 640, height: 480, quality: 80 },
+                high: { width: 960, height: 720, quality: 95 },
+            };
+            const p = presets[e.target.value] || presets.medium;
+            App.api('POST', '/video/quality', p);
+        });
+    }
 });

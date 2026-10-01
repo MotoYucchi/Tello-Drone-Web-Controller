@@ -70,10 +70,16 @@ class FlightLogger:
 
     def start_session(self) -> str:
         """新しい接続・飛行セッションのログ記録を開始"""
+        # 既存セッションのスレッドを安全に終了
+        old_thread = None
         with self._lock:
             if self.is_logging:
-                self.stop_session()
+                self.is_logging = False
+                old_thread = self._thread
+        if old_thread and old_thread.is_alive():
+            old_thread.join(timeout=1.5)
 
+        with self._lock:
             now_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
             filename = f"TELLO_{now_str}.csv"
             self.current_file = os.path.join(self.log_dir, filename)
@@ -131,11 +137,13 @@ class FlightLogger:
     def _log_loop(self) -> None:
         """定期記録ループ (約1秒周期)"""
         while self.is_logging and self.current_file:
+            time.sleep(1.0)
+            if not self.is_logging or not self.current_file:
+                break
             try:
                 self._record_row()
             except Exception as e:
                 logger.error(f"ログ書き込みエラー: {e}")
-            time.sleep(1.0)
 
     def _record_row(self) -> None:
         """1レコードをCSVに追記"""

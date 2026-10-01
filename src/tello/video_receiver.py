@@ -143,13 +143,19 @@ class TelloVideoReceiver:
     def generate_mjpeg_frames(self):
         """MJPEG ストリーム生成器（StreamingResponse用）"""
         while self.streaming:
-            jpeg = self.get_frame_jpeg()
-            if jpeg:
-                yield (
-                    b'--frame\r\n'
-                    b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
-                )
-            else:
+            try:
+                jpeg = self.get_frame_jpeg()
+                if jpeg:
+                    yield (
+                        b'--frame\r\n'
+                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
+                    )
+                else:
+                    time.sleep(0.05)
+            except GeneratorExit:
+                break
+            except Exception as e:
+                logger.debug(f"mjpegストリーム生成例外: {e}")
                 time.sleep(0.05)
 
     def set_quality(self, width: int, height: int, quality: int) -> None:
