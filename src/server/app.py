@@ -633,8 +633,8 @@ async def download_log(filename: str):
     """指定されたフライトログCSVをダウンロード (パストラバーサル防止)"""
     safe_filename = os.path.basename(filename)
     import re
-    # 厳格なファイル名パターンチェック (TELLO_YYYY-MM-DD-HH-mm-ss.csv のみ許可)
-    if not re.match(r"^TELLO_\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.csv$", safe_filename):
+    # 厳格なファイル名パターンチェック (TELLO_YYYY-MM-DD-HH-mm-ss(_N)?.csv のみ許可)
+    if not re.match(r"^TELLO_\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}(_\d+)?\.csv$", safe_filename):
         raise HTTPException(400, "無効なログファイル名フォーマットです")
 
     fl: FlightLogger = app_state.get('logger')

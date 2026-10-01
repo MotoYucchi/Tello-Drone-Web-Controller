@@ -81,7 +81,13 @@ class FlightLogger:
 
         with self._lock:
             now_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            filename = f"TELLO_{now_str}.csv"
+            base_filename = f"TELLO_{now_str}"
+            filename = f"{base_filename}.csv"
+            counter = 1
+            while os.path.exists(os.path.join(self.log_dir, filename)):
+                filename = f"{base_filename}_{counter}.csv"
+                counter += 1
+
             self.current_file = os.path.join(self.log_dir, filename)
             self.start_time = time.time()
             self._event_queue.clear()

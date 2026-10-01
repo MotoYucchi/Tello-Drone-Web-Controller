@@ -52,7 +52,11 @@ class LineTraceAlgorithm:
         }
 
         try:
-            if frame is None or frame.size == 0:
+            if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+                return False, result_info, None
+
+            # 極小・破損フレームの誤検出防止ガード (10x10未満は無効)
+            if frame.shape[0] < 10 or frame.shape[1] < 10:
                 return False, result_info, None
 
             # 1. リサイズ

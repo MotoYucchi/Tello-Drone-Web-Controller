@@ -179,15 +179,19 @@ def test_corrupted_image_crash_resilience():
 def test_path_traversal_prevention(client):
     """
     安全性テスト 8: パストラバーサル・不正ファイルアクセス防御
-    不適切なファイル名形式やディレクトリトラバーサル試行を400エラーで拒否すること。
+    不適切なファイル名形式やディレクトリトラバーサル試行を確実に拒絶すること。
     """
-    # ディレクトリトラバーサル
+    # ディレクトリトラバーサル (FastAPI/Starletteのルーティング段階または正規表現で400/404)
     resp = client.get("/api/logs/..%2F..%2Fwindows%2Fsystem32%2Fcmd.exe")
-    assert resp.status_code == 400
+    assert resp.status_code in (400, 404)
 
-    # 拡張子違い
+    # 許可されていない拡張子
     resp2 = client.get("/api/logs/secret.txt")
     assert resp2.status_code == 400
+
+    # 命名規則違反のCSV
+    resp3 = client.get("/api/logs/malicious_payload.csv")
+    assert resp3.status_code == 400
 
 
 def test_logger_rapid_restarts(tmp_path):
