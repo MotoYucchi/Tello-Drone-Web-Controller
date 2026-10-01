@@ -464,7 +464,7 @@ class TelloUDPController:
 
     def _rc_loop(self) -> None:
         """RC制御値を50ms間隔で送信"""
-        while self.rc_active and self.is_flying:
+        while self.rc_active:
             v = self._rc_values
             cmd = f"rc {v['lr']} {v['fb']} {v['ud']} {v['yaw']}"
             self.send_command_no_wait(cmd)

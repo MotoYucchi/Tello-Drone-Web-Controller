@@ -56,6 +56,13 @@ const App = {
         this.ws.onopen = () => {
             console.log('WS control connected');
             document.getElementById('footerWsStatus').textContent = '接続';
+            
+            // 接続時にPashatoku設定を送信
+            const userInp = document.getElementById('qrUserName');
+            const studentInp = document.getElementById('qrStudentId');
+            if (userInp && studentInp) {
+                this.wsSend({ type: 'pashatoku_creds', user_name: userInp.value, student_id: studentInp.value });
+            }
         };
         this.ws.onmessage = (e) => this._handleWSMessage(JSON.parse(e.data));
         this.ws.onclose = () => {
@@ -319,6 +326,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // QRリンク読み込み
     QRManager.loadLinks();
+
+    // === Pashatoku 連携設定 ===
+    const userInp = document.getElementById('qrUserName');
+    const studentInp = document.getElementById('qrStudentId');
+    if (userInp && studentInp) {
+        userInp.value = localStorage.getItem('qrUserName') || '';
+        studentInp.value = localStorage.getItem('qrStudentId') || '';
+
+        const updatePashatokuCreds = () => {
+            localStorage.setItem('qrUserName', userInp.value);
+            localStorage.setItem('qrStudentId', studentInp.value);
+            App.wsSend({ type: 'pashatoku_creds', user_name: userInp.value, student_id: studentInp.value });
+        };
+
+        userInp.addEventListener('input', updatePashatokuCreds);
+        studentInp.addEventListener('input', updatePashatokuCreds);
+    }
 
     // === Buttons ===
     document.getElementById('btnConnect').addEventListener('click', () => {

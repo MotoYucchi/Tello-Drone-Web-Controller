@@ -51,6 +51,27 @@ async def lifespan(app: FastAPI):
     app_state['loop'] = asyncio.get_running_loop()
     app_state['qr_last_scan'] = 0.0
 
+    def send_to_pashatoku(qr_text: str):
+        """PashatokuへQRデータを送信"""
+        import urllib.request
+        url = "http://192.168.10.39:8080/api/qr/receive"
+        
+        user_name = app_state.get('pashatoku_user_name', '')
+        student_id = app_state.get('pashatoku_student_id', '')
+        
+        headers = {
+            "X-User-Name": user_name,
+            "X-Student-Id": student_id,
+            "Content-Type": "text/plain; charset=utf-8"
+        }
+        data = qr_text.encode('utf-8')
+        req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=3.0) as f:
+                logger.info(f"Pashatokuへ送信成功: {f.status} {qr_text}")
+        except Exception as e:
+            logger.error(f"Pashatokuへの送信に失敗しました: {e}")
+
     def process_video_frame(frame: 'numpy.ndarray'):
         lt: LineTraceEngine = app_state.get('linetrace')
         tello: TelloUDPController = app_state.get('tello')
@@ -64,8 +85,12 @@ async def lifespan(app: FastAPI):
             if qr:
                 qr_res = qr.process_detection(frame)
                 if qr_res.get('success') and qr_res.get('newly_stored'):
-                    qr_res['type'] = 'qr_response'
+                    # Pashatokuに送信 (別スレッドで実行してブロックを防ぐ)
                     loop = app_state.get('loop')
+                    if loop:
+                        loop.run_in_executor(None, send_to_pashatoku, qr_res.get('qr_text'))
+
+                    qr_res['type'] = 'qr_response'
                     if loop:
                         from .ws_handler import manager
                         asyncio.run_coroutine_threadsafe(manager.broadcast(qr_res), loop)

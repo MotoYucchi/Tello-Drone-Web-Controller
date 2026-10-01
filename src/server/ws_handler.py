@@ -248,6 +248,11 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             lt.set_params(msg.get('params', {}))
             return {'type': 'linetrace_params', 'success': True, 'params': lt.get_params()}
 
+        elif msg_type == 'pashatoku_creds':
+            _app_state['pashatoku_user_name'] = msg.get('user_name', '')
+            _app_state['pashatoku_student_id'] = msg.get('student_id', '')
+            return None
+
         elif msg_type == 'qr_scan':
             qr = _app_state['qr']
             video = _app_state['video']
@@ -255,6 +260,28 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if frame is None:
                 return {'type': 'qr_response', 'success': False, 'message': 'フレームなし'}
             result = qr.process_detection(frame)
+            
+            # If a new QR code was stored via manual scan, send it to Pashatoku
+            if result.get('success') and result.get('newly_stored'):
+                try:
+                    import urllib.request
+                    url = "http://192.168.10.39:8080/api/qr/receive"
+                    qr_text = result.get('qr_text')
+                    user_name = _app_state.get('pashatoku_user_name', '')
+                    student_id = _app_state.get('pashatoku_student_id', '')
+                    
+                    headers = {
+                        "X-User-Name": user_name,
+                        "X-Student-Id": student_id,
+                        "Content-Type": "text/plain; charset=utf-8"
+                    }
+                    data = qr_text.encode('utf-8')
+                    req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+                    # Run synchronously but non-blocking using asyncio.to_thread
+                    asyncio.create_task(asyncio.to_thread(urllib.request.urlopen, req, timeout=3.0))
+                except Exception as e:
+                    logger.error(f"Pashatoku送信設定エラー (Manual Scan): {e}")
+
             result['type'] = 'qr_response'
             return result
 

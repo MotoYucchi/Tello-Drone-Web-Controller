@@ -259,6 +259,17 @@
                     QRコード
                 </div>
                 <div class="card-body">
+                    <div class="settings-group mb-md" style="padding: 12px; background: var(--bg-glass); border: 1px solid var(--border-glass); border-radius: var(--border-radius-sm);">
+                        <div class="text-xs text-muted mb-sm">Pashatoku 連携設定</div>
+                        <div class="setting-row">
+                            <label>ユーザー名</label>
+                            <input type="text" id="qrUserName" placeholder="例: MotoYucchi" class="text-input">
+                        </div>
+                        <div class="setting-row mt-sm">
+                            <label>学籍番号</label>
+                            <input type="text" id="qrStudentId" placeholder="例: 12345" class="text-input">
+                        </div>
+                    </div>
                     <div class="flex gap-sm mb-md flex-wrap">
                         <button class="btn btn-primary btn-sm" id="btnQrScan">
                             <i class="fas fa-camera"></i> スキャン

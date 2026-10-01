@@ -13,8 +13,16 @@ const VideoManager = {
 
     showStream() {
         if (!this.streamImg || !this.overlay) this.init();
-        // MJPEG ストリームのURLを設定
-        this.streamImg.src = '/video_stream?' + Date.now();
+        
+        const toggle = document.getElementById('toggleVideoMode');
+        const isLineTrace = toggle && toggle.checked;
+
+        if (isLineTrace) {
+            this.streamImg.src = '/linetrace_stream?' + Date.now();
+        } else {
+            this.streamImg.src = '/video_stream?' + Date.now();
+        }
+        
         this.streamImg.style.display = 'block';
         this.overlay.classList.add('hidden');
         App.videoStreaming = true;
