@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/main.css?v=2.2">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 <body>
@@ -181,9 +181,9 @@
                 <div class="card-body">
                     <div class="linetrace-controls">
                         <!-- Camera Mode Selector -->
-                        <div class="mb-sm">
-                            <div class="text-xs text-muted mb-xs">機体カメラタイプ</div>
-                            <select id="ltCameraMode">
+                        <div class="network-select">
+                            <div class="hint">機体カメラタイプ</div>
+                            <select id="ltCameraMode" style="background-color: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-glass); border-radius: var(--border-radius-sm); padding: 8px 12px; width: 100%;">
                                 <option value="standard" selected>通常機体 (前方微下向きカメラ)</option>
                                 <option value="downward">改造機体 (ほぼ真下カメラ)</option>
                             </select>
@@ -359,10 +359,10 @@
 <div class="notification-area" id="notificationArea"></div>
 
 <!-- ===== Scripts ===== -->
-<script src="/static/js/app.js"></script>
-<script src="/static/js/controls.js"></script>
-<script src="/static/js/linetrace.js"></script>
-<script src="/static/js/video.js"></script>
+<script src="/static/js/app.js?v=2.2"></script>
+<script src="/static/js/controls.js?v=2.2"></script>
+<script src="/static/js/linetrace.js?v=2.2"></script>
+<script src="/static/js/video.js?v=2.2"></script>
 
 </body>
 </html>
