@@ -1,5 +1,8 @@
 /**
  * app.js — メインアプリケーション + WebSocket管理
+ * 
+ * 2010年代後半ダークテーマUIのステート管理、テレメトリ受信、
+ * スマホHTTP環境（非Secure Context）における安全なフォールバックを完備。
  */
 
 // =========================================================================
@@ -30,7 +33,7 @@ const App = {
     },
 
     // =========================================================================
-    // Notifications
+    // Notifications (2010s Dark Alert Style)
     // =========================================================================
     notify(message, type = 'info', duration = 3000) {
         const area = document.getElementById('notificationArea');
@@ -41,8 +44,47 @@ const App = {
         area.prepend(el);
         setTimeout(() => {
             el.classList.add('fade-out');
-            setTimeout(() => el.remove(), 300);
+            setTimeout(() => el.remove(), 250);
         }, duration);
+    },
+
+    // =========================================================================
+    // HTTP/Non-Secure Context Safe Clipboard Copy
+    // =========================================================================
+    copyToClipboard(text) {
+        if (!text) return;
+        if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => {
+                this.notify('クリップボードにコピーしました', 'info');
+            }).catch(() => {
+                this._fallbackCopyText(text);
+            });
+        } else {
+            this._fallbackCopyText(text);
+        }
+    },
+
+    _fallbackCopyText(text) {
+        try {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.top = '-9999px';
+            textArea.style.left = '-9999px';
+            textArea.style.opacity = '0';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(textArea);
+            if (ok) {
+                this.notify('クリップボードにコピーしました', 'info');
+            } else {
+                prompt('内容をコピーしてください (Ctrl+C / 選択コピー):', text);
+            }
+        } catch (_) {
+            prompt('内容をコピーしてください (Ctrl+C / 選択コピー):', text);
+        }
     },
 
     // =========================================================================
@@ -57,7 +99,10 @@ const App = {
         this.ws.onopen = () => {
             console.log('WS control connected');
             const wsStatus = document.getElementById('footerWsStatus');
-            if (wsStatus) wsStatus.textContent = '接続';
+            if (wsStatus) {
+                wsStatus.textContent = '接続済';
+                wsStatus.className = 'stat-value text-success';
+            }
             
             // 接続時にPashatoku設定を送信
             const userInp = document.getElementById('qrUserName');
@@ -70,7 +115,10 @@ const App = {
         this.ws.onclose = () => {
             console.log('WS control disconnected');
             const wsStatus = document.getElementById('footerWsStatus');
-            if (wsStatus) wsStatus.textContent = '切断';
+            if (wsStatus) {
+                wsStatus.textContent = '切断';
+                wsStatus.className = 'stat-value text-muted';
+            }
             // 自動再接続
             setTimeout(() => this.connectWS(), 3000);
         };
@@ -107,7 +155,7 @@ const App = {
             this.flying = false;
             this._updateConnectionUI(false);
             this._resetTelemetryUI();
-            this.notify('Tello から切断しました（ステータスをリセット）', 'info');
+            this.notify('Tello から切断しました', 'info');
             // 切断時にネットワークインターフェースを自動再検出
             this.loadInterfaces();
         } else if (type === 'takeoff_response') {
@@ -170,14 +218,19 @@ const App = {
             const elFps = document.getElementById('footerFps');
             const elIp = document.getElementById('footerLocalIp');
 
-            if (elBat) elBat.textContent = `${bat}%`;
+            if (elBat) {
+                elBat.textContent = `${bat}%`;
+                elBat.className = bat <= 20 ? 'value text-danger' : (bat <= 40 ? 'value text-warning' : 'value');
+            }
             if (elHeight) elHeight.textContent = `${height}cm`;
             if (elTemp) elTemp.textContent = `${temp}°C`;
             if (elTime) elTime.textContent = `${flightTime}s`;
             if (elFps) elFps.textContent = video.fps || 0;
+            const elFpsInline = document.getElementById('footerFpsInline');
+            if (elFpsInline) elFpsInline.textContent = `${video.fps || 0} FPS`;
             if (elIp) elIp.textContent = tello.local_ip || '--';
 
-            // LineTrace結果の更新 (LSD詳細表示)
+            // LineTrace結果の更新
             if (typeof LineTraceUI !== 'undefined' && lt.detected !== undefined) {
                 LineTraceUI.updateResultInfo(lt);
             }
@@ -212,9 +265,6 @@ const App = {
         this._updateConnectionUI(status.connected);
     },
 
-    /**
-     * 切断時にテレメトリ表示のみをリセット（スライダーやQR履歴は保持）
-     */
     _resetTelemetryUI() {
         const elBat = document.getElementById('valBattery');
         const elHeight = document.getElementById('valHeight');
@@ -224,15 +274,17 @@ const App = {
         const elIp = document.getElementById('footerLocalIp');
         const elLt = document.getElementById('ltDetected');
 
-        if (elBat) elBat.textContent = '--%';
+        if (elBat) { elBat.textContent = '--%'; elBat.className = 'value'; }
         if (elHeight) elHeight.textContent = '--cm';
         if (elTemp) elTemp.textContent = '--°C';
         if (elTime) elTime.textContent = '--s';
         if (elFps) elFps.textContent = '0';
+        const elFpsInline = document.getElementById('footerFpsInline');
+        if (elFpsInline) elFpsInline.textContent = '0 FPS';
         if (elIp) elIp.textContent = '--';
         if (elLt) {
             elLt.textContent = '--';
-            elLt.style.color = 'var(--text-muted)';
+            elLt.className = 'value text-muted';
         }
 
         // 映像ストリームもリセット
@@ -245,13 +297,13 @@ const App = {
         const btn = document.getElementById('btnConnect');
 
         if (connected) {
-            if (dot) dot.classList.add('connected');
+            if (dot) dot.className = 'status-dot connected';
             if (text) text.textContent = '接続中';
-            if (btn) btn.innerHTML = '<i class="fas fa-plug"></i><span>切断</span>';
+            if (btn) btn.innerHTML = '<i class="fas fa-plug"></i> <span>切断</span>';
         } else {
-            if (dot) dot.classList.remove('connected');
+            if (dot) dot.className = 'status-dot';
             if (text) text.textContent = '切断中';
-            if (btn) btn.innerHTML = '<i class="fas fa-plug"></i><span>接続</span>';
+            if (btn) btn.innerHTML = '<i class="fas fa-plug"></i> <span>接続</span>';
         }
     },
 
@@ -360,17 +412,23 @@ const QRManager = {
             item.className = 'qr-link-item';
             
             let contentHTML = '';
+            const safeText = (data.qr_text || '').replace(/"/g, '&quot;');
             if (data.link) {
-                contentHTML = `<a href="${data.link}" target="_blank" rel="noopener">${data.qr_text}</a>`;
+                contentHTML = `<a href="${data.link}" target="_blank" rel="noopener">${safeText}</a>`;
             } else {
-                contentHTML = `<span>${data.qr_text}</span>`;
+                contentHTML = `<span>${safeText}</span>`;
             }
 
             item.innerHTML = `
-                ${contentHTML}
-                <button class="btn btn-sm btn-danger btn-delete" onclick="QRManager.deleteLink('${key}')">
-                    <i class="fas fa-trash"></i>
-                </button>
+                <div class="qr-text-wrap">${contentHTML}</div>
+                <div class="qr-item-actions">
+                    <button class="btn btn-xs btn-default" title="コピー" onclick="App.copyToClipboard('${safeText}')">
+                        <i class="fas fa-copy"></i>
+                    </button>
+                    <button class="btn btn-xs btn-danger btn-delete" title="削除" onclick="QRManager.deleteLink('${key}')">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
             `;
             container.appendChild(item);
         }
@@ -411,11 +469,50 @@ const QRManager = {
     },
 };
 
+// =========================================================================
+// モバイル向けタブマネージャー (PCでは無効化/常時表示)
+// =========================================================================
+const TabManager = {
+    init() {
+        const tabBtns = document.querySelectorAll('.mobile-tab-btn');
+        if (!tabBtns.length) return;
+
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const targetId = btn.dataset.target;
+                tabBtns.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+
+                // モバイル表示時のみターゲットパネルの切り替え
+                document.querySelectorAll('.tab-panel').forEach(panel => {
+                    if (panel.id === targetId) {
+                        panel.classList.add('tab-active');
+                    } else {
+                        panel.classList.remove('tab-active');
+                    }
+                });
+            });
+        });
+    }
+};
 
 // =========================================================================
 // Init
 // =========================================================================
 document.addEventListener('DOMContentLoaded', () => {
+    // セキュリティコンテキスト（HTTP環境）の検出と案内
+    const isSecure = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    const securityBadge = document.getElementById('securityNotice');
+    if (securityBadge) {
+        if (!isSecure) {
+            securityBadge.textContent = 'HTTP接続 (ローカル通信)';
+            securityBadge.title = 'PCホストによるHTTP環境です。カメラ/センサー等のブラウザ直接利用は制限されますが、ドローン制御・MJPEG映像は正常に機能します。';
+            securityBadge.classList.add('visible');
+        } else {
+            securityBadge.textContent = 'ローカル接続';
+        }
+    }
+
     // WebSocket接続
     App.connectWS();
 
@@ -424,6 +521,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // QRリンク読み込み
     QRManager.loadLinks();
+
+    // モバイルタブ初期化
+    TabManager.init();
 
     // === Pashatoku 連携設定 ===
     const userInp = document.getElementById('qrUserName');
