@@ -118,14 +118,12 @@ async def lifespan(app: FastAPI):
                 fl.update_linetrace(lt.get_last_result_info())
 
             if lt.active:
-                if result.detected:
-                    tello.set_rc(result.lr_value, result.forward_speed, 0, result.yaw_value)
-                    if fl:
-                        fl.update_rc(result.lr_value, result.forward_speed, 0, result.yaw_value, mode="linetrace")
-                else:
-                    tello.set_rc(0, 0, 0, 0)
-                    if fl:
-                        fl.update_rc(0, 0, 0, 0, mode="linetrace")
+                # LineTraceEngine が決定したRC制御値 (追従・ダンピング・自動復帰サーチ) を適用
+                rc = lt.get_rc_values(result)
+                tello.set_rc(rc['lr'], rc['fb'], 0, rc['yaw'])
+                if fl:
+                    mode = "linetrace" if result.detected else f"lt_{result.tracking_state}"
+                    fl.update_rc(rc['lr'], rc['fb'], 0, rc['yaw'], mode=mode)
     
     app_state['video'].on_frame = process_video_frame
 
@@ -256,7 +254,7 @@ async def connect_tello(req: ConnectRequest):
     if req.local_ip:
         tello.local_ip = req.local_ip
 
-    success = tello.connect()
+    success = await asyncio.to_thread(tello.connect)
     if success:
         # テレメトリ受信開始
         state_recv: TelloStateReceiver = app_state['state_receiver']
@@ -277,7 +275,7 @@ async def connect_tello(req: ConnectRequest):
 
 @app.post("/api/disconnect")
 async def disconnect_tello():
-    """Telloから切断"""
+    """Telloから切断 (バッテリー切れ時もフリーズせず即座にクリーンアップ)"""
     tello: TelloUDPController = app_state['tello']
     fl: FlightLogger = app_state['logger']
 
@@ -292,13 +290,13 @@ async def disconnect_tello():
     # 映像停止
     video: TelloVideoReceiver = app_state['video']
     if video.streaming:
-        tello.stream_off()
+        await asyncio.to_thread(tello.stream_off, False)
         video.stop()
 
     # テレメトリ停止
     app_state['state_receiver'].stop()
 
-    success = tello.disconnect()
+    success = await asyncio.to_thread(tello.disconnect, True)
     return {"success": success, "message": "切断完了" if success else "切断失敗"}
 
 
@@ -337,7 +335,7 @@ async def takeoff():
         raise HTTPException(400, "未接続")
     if fl:
         fl.log_event("Takeoff requested")
-    success = tello.takeoff()
+    success = await asyncio.to_thread(tello.takeoff)
     if fl and success:
         fl.log_event("Takeoff success")
     return {"success": success}
@@ -352,7 +350,7 @@ async def land():
     app_state['linetrace'].active = False
     if fl:
         fl.log_event("Land requested")
-    success = tello.land()
+    success = await asyncio.to_thread(tello.land)
     if fl and success:
         fl.log_event("Land success")
     return {"success": success}
@@ -367,7 +365,7 @@ async def emergency():
     app_state['linetrace'].active = False
     if fl:
         fl.log_event("EMERGENCY STOP")
-    success = tello.emergency()
+    success = await asyncio.to_thread(tello.emergency)
     return {"success": success}
 
 
@@ -426,10 +424,9 @@ async def start_video():
     if video.streaming:
         return {"success": True, "message": "既にストリーミング中"}
 
-    tello.stream_on()
-    import time
-    time.sleep(2)
-    success = video.start()
+    await asyncio.to_thread(tello.stream_on)
+    await asyncio.sleep(2.0)
+    success = await asyncio.to_thread(video.start)
     return {"success": success}
 
 
@@ -437,9 +434,9 @@ async def start_video():
 async def stop_video():
     tello: TelloUDPController = app_state['tello']
     video: TelloVideoReceiver = app_state['video']
-    video.stop()
+    await asyncio.to_thread(video.stop)
     if tello.is_connected:
-        tello.stream_off()
+        await asyncio.to_thread(tello.stream_off)
     return {"success": True}
 
 

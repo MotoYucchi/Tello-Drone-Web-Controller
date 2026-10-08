@@ -67,6 +67,7 @@ class TelloUDPController:
 
         # コマンドロック（順次実行を保証）
         self._command_lock = threading.Lock()
+        self._last_command_time = time.time()
 
         # コールバック
         self.on_status_update: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -178,8 +179,13 @@ class TelloUDPController:
             )
             self._recv_thread.start()
 
-            # SDKモードへ切り替え
-            resp = self.send_command('command', timeout=10.0)
+            # SDKモードへ切り替え (UDPパケットロスに備えて最大2回試行)
+            resp = self.send_command('command', timeout=5.0)
+            if resp is None or 'ok' not in resp.lower():
+                time.sleep(0.3)
+                logger.warning("初回command無応答のため再試行します...")
+                resp = self.send_command('command', timeout=5.0)
+
             if resp is None or 'ok' not in resp.lower():
                 logger.error(f"SDKモード開始失敗: resp={resp}")
                 self.disconnect()
@@ -203,15 +209,22 @@ class TelloUDPController:
             self.disconnect()
             return False
 
-    def disconnect(self) -> bool:
-        """Telloから切断"""
-        try:
-            logger.info("Tello切断中...")
+    def disconnect(self, force: bool = True) -> bool:
+        """
+        Telloから切断。
 
-            # 飛行中なら着陸
-            if self.is_flying:
-                self.land()
-                time.sleep(3)
+        バッテリー切れや電源断、通信断時にタイムアウトで20秒以上フリーズするのを防ぐため、
+        応答待機なしで安全・即座にリソースを解放する。
+        """
+        try:
+            logger.info(f"Tello切断中... (force={force})")
+
+            # 飛行中フラグが残っている場合、機体が生きていれば着陸できるようコマンドだけ非同期送信
+            if self.is_flying and self.sock:
+                try:
+                    self.send_command_no_wait('land')
+                except Exception:
+                    pass
 
             # RC制御停止
             self.stop_rc()
@@ -237,6 +250,8 @@ class TelloUDPController:
 
         except Exception as e:
             logger.error(f"Tello切断エラー: {e}")
+            self.is_connected = False
+            self.is_flying = False
             return False
 
     # =========================================================================
@@ -267,6 +282,7 @@ class TelloUDPController:
                 self._response_event.clear()
 
                 # 送信
+                self._last_command_time = time.time()
                 self.sock.sendto(
                     command.encode('utf-8'),
                     self.TELLO_ADDRESS
@@ -291,6 +307,7 @@ class TelloUDPController:
         if not self.sock:
             return
         try:
+            self._last_command_time = time.time()
             self.sock.sendto(
                 command.encode('utf-8'),
                 self.TELLO_ADDRESS
@@ -319,16 +336,15 @@ class TelloUDPController:
                     self.status['flight_time'] = int(resp[:-1])
                     self._response = resp
                     self._response_event.set()
-                elif resp.lower() in ('ok', 'error'):
+                elif 'ok' in resp.lower() or 'error' in resp.lower():
                     # 標準レスポンス
                     self._response = resp
                     self._response_event.set()
-                elif 'error' in resp.lower():
-                    self._response = resp
-                    self._response_event.set()
-                else:
-                    # その他（テレメトリデータなど）
+                elif ';' in resp and ':' in resp:
+                    # ポート8889に混ざったテレメトリ文字列 → ステータス更新のみ行い、コマンド応答待機は解除しない
                     self._parse_state_data(resp)
+                else:
+                    # その他の応答
                     self._response = resp
                     self._response_event.set()
 
@@ -381,16 +397,26 @@ class TelloUDPController:
     def takeoff(self) -> bool:
         """離陸"""
         if not self.is_connected:
-            return False
+            logger.info("未接続のため自動接続を試行中...")
+            if not self.connect():
+                logger.error("離陸不可: Telloに接続できませんでした")
+                return False
         if self.is_flying:
             logger.warning("既に飛行中です")
             return True
+        # RC制御スレッドが走っている場合は干渉を防ぐため一時停止
+        self.stop_rc()
+        # SDKコマンドモードを確実に有効化 (15秒アイドルによるSDKモード解除への対策)
+        logger.info("SDKモード確認 (command 送信)...")
+        self.send_command('command', timeout=3.0)
+        time.sleep(0.1)
+        logger.info("離陸コマンド(takeoff)送信中...")
         resp = self.send_command('takeoff', timeout=20.0)
-        if resp and 'ok' in resp.lower():
+        if (resp and 'ok' in resp.lower()) or self.status.get('height', 0) > 20:
             self.is_flying = True
             logger.info("離陸成功")
             return True
-        logger.error(f"離陸失敗: {resp}")
+        logger.error(f"離陸失敗 (応答: {resp})")
         return False
 
     def land(self) -> bool:
@@ -532,32 +558,52 @@ class TelloUDPController:
         self._keepalive_thread.start()
 
     def _keepalive_loop(self) -> None:
-        """KeepAliveループ"""
+        """KeepAliveループ: コマンドが一定時間途絶えた場合のみSDKモード維持のためcommandを安全送信"""
         while self._keepalive_running and self.is_connected:
-            time.sleep(5.0)
-            if self._keepalive_running and self.is_connected:
+            time.sleep(2.0)
+            if not self._keepalive_running or not self.is_connected:
+                break
+            # 直近8秒以内にユーザー等のコマンド送信があった場合は送信不要
+            if time.time() - self._last_command_time < 8.0:
+                continue
+            # 他のコマンド実行をブロックしないよう非ブロッキングでロックを取得
+            acquired = self._command_lock.acquire(blocking=False)
+            if acquired:
                 try:
-                    self.send_command_no_wait('command')
-                    # ステータスも定期取得
-                    self.send_command_no_wait('battery?')
+                    if self.sock and self.is_connected:
+                        self._last_command_time = time.time()
+                        self.sock.sendto(b'command', self.TELLO_ADDRESS)
+                        logger.debug("KeepAlive: command 送信")
                 except Exception:
                     pass
+                finally:
+                    self._command_lock.release()
 
     # =========================================================================
     # 映像制御
     # =========================================================================
 
     def stream_on(self) -> bool:
-        """映像ストリーミング開始"""
+        """映像ストリーミング開始 (streamon + setfps low でパケットロスを低減)"""
         resp = self.send_command('streamon', timeout=10.0)
-        return resp is not None and 'ok' in resp.lower()
+        success = resp is not None and 'ok' in resp.lower()
+        if success:
+            # ストリーミングFPSをlowに設定してWi-Fi帯域負荷とH.264デコード欠損(MBエラー)を低減
+            time.sleep(0.3)
+            self.set_fps('low')
+        return success
 
-    def stream_off(self) -> bool:
-        """映像ストリーミング停止"""
-        resp = self.send_command('streamoff', timeout=5.0)
+    def stream_off(self, wait: bool = False) -> bool:
+        """映像ストリーミング停止 (wait=Falseでノンブロッキング送信)"""
+        if not self.sock or not self.is_connected:
+            return True
+        if not wait:
+            self.send_command_no_wait('streamoff')
+            return True
+        resp = self.send_command('streamoff', timeout=3.0)
         return resp is not None and 'ok' in resp.lower()
 
     def set_fps(self, fps: str = 'low') -> bool:
         """FPS設定 (low, middle, high)"""
-        resp = self.send_command(f'setfps {fps}')
+        resp = self.send_command(f'setfps {fps}', timeout=5.0)
         return resp is not None and 'ok' in resp.lower()

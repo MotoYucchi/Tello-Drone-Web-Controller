@@ -50,11 +50,20 @@ class TelloVideoReceiver:
 
         try:
             logger.info("映像受信開始...")
-            self.cap = cv2.VideoCapture(self.VIDEO_URL)
+            import os
+            # FFmpegキャプチャオプションを環境変数に設定しパケットバッファを拡張
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "overrun_nonfatal;1|fifo_size;50000000|fflags;nobuffer|flags;low_delay"
+
+            self.cap = cv2.VideoCapture(self.VIDEO_URL, cv2.CAP_FFMPEG)
 
             if not self.cap.isOpened():
                 logger.error("VideoCapture オープン失敗")
                 return False
+
+            try:
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+            except Exception:
+                pass
 
             self.streaming = True
             self._thread = threading.Thread(
@@ -150,6 +159,7 @@ class TelloVideoReceiver:
                         b'--frame\r\n'
                         b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
                     )
+                    time.sleep(0.033)
                 else:
                     time.sleep(0.05)
             except GeneratorExit:

@@ -212,3 +212,71 @@ def test_logger_rapid_restarts(tmp_path):
 
     assert len(fl.list_logs()) == 5
 
+
+def test_takeoff_ensures_command_mode():
+    """
+    安全性テスト 10: 離陸時に確実に command (SDKモード) が先行送信されること
+    Telloが15秒アイドルでSDKモードから抜けても、離陸前に自動でcommandが再送される。
+    """
+    tello = TelloUDPController()
+    sent_commands = []
+
+    def mock_send_command(cmd, timeout=7.0):
+        sent_commands.append(cmd)
+        return 'ok'
+
+    tello.is_connected = True
+    tello.send_command = mock_send_command
+
+    result = tello.takeoff()
+    assert result is True
+    assert 'command' in sent_commands
+    assert 'takeoff' in sent_commands
+    # command が takeoff より先に送信されていること
+    assert sent_commands.index('command') < sent_commands.index('takeoff')
+    assert tello.is_flying is True
+
+
+def test_disconnect_nonblocking_instant_on_battery_depletion():
+    """
+    安全性テスト 11: バッテリー切れ・電源断時でも disconnect がブロックせず即座に完了すること
+    is_flying=True の状態でも、タイムアウトで何秒も停止せず即座にローカルリソースを解放する。
+    """
+    import time
+    tello = TelloUDPController()
+    tello.is_connected = True
+    tello.is_flying = True
+    tello.rc_active = True
+
+    start_t = time.time()
+    success = tello.disconnect(force=True)
+    elapsed = time.time() - start_t
+
+    assert success is True
+    assert elapsed < 0.2, f"切断処理に {elapsed:.3f}秒 かかりました (フリーズ防止要件: <0.2秒)"
+    assert tello.is_connected is False
+    assert tello.is_flying is False
+    assert tello.rc_active is False
+    assert tello.sock is None
+
+
+def test_state_receiver_heartbeat_timeout():
+    """
+    安全性テスト 12: テレメトリ途絶（バッテリー切れ等）を検知するハートビート判定
+    """
+    import time
+    from src.tello.state_receiver import TelloStateReceiver
+    recv = TelloStateReceiver()
+    recv._running = True
+
+    # 受信履歴がない場合は alive でない
+    assert recv.is_alive(timeout=3.5) is False
+
+    # パケット受信シミュレーション
+    recv.last_packet_time = time.time()
+    assert recv.is_alive(timeout=3.5) is True
+
+    # 4秒前のパケット（途絶状態）
+    recv.last_packet_time = time.time() - 4.0
+    assert recv.is_alive(timeout=3.5) is False
+

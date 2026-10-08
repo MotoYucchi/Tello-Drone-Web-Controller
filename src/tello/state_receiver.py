@@ -5,6 +5,7 @@ Telloはポート8890にテレメトリデータを自動送信する。
 このモジュールはそのデータを受信してパースする。
 """
 
+import time
 import socket
 import threading
 import logging
@@ -24,8 +25,9 @@ class TelloStateReceiver:
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
-        # 最新のテレメトリデータ
+        # 最新のテレメトリデータと最終パケット受信時刻
         self.state: Dict[str, Any] = {}
+        self.last_packet_time: float = 0.0
 
         # コールバック
         self.on_state_update: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -71,6 +73,7 @@ class TelloStateReceiver:
     def stop(self) -> None:
         """受信停止"""
         self._running = False
+        self.last_packet_time = 0.0
         if self.sock:
             try:
                 self.sock.close()
@@ -79,6 +82,12 @@ class TelloStateReceiver:
             self.sock = None
         logger.info("テレメトリ受信停止")
 
+    def is_alive(self, timeout: float = 3.5) -> bool:
+        """直近のテレメトリ受信があるか（死活判定）"""
+        if not self._running or self.last_packet_time <= 0:
+            return False
+        return (time.time() - self.last_packet_time) < timeout
+
     def _receive_loop(self) -> None:
         """受信ループ"""
         while self._running:
@@ -86,6 +95,7 @@ class TelloStateReceiver:
                 if not self.sock:
                     break
                 data, addr = self.sock.recvfrom(1024)
+                self.last_packet_time = time.time()
                 state_str = data.decode('utf-8').strip()
                 self._parse_state(state_str)
             except ConnectionResetError:

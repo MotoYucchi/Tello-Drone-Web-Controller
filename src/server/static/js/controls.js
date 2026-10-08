@@ -38,35 +38,62 @@ const Controls = {
         this.pressedKeys.clear();
     },
 
+    _normalizeKey(e) {
+        // e.code を優先（物理キー判定: 日本語IME・全角モード・CapsLockの影響を完全に排除）
+        const codeMap = {
+            'KeyW': 'w', 'KeyS': 's', 'KeyA': 'a', 'KeyD': 'd',
+            'KeyQ': 'q', 'KeyE': 'e', 'KeyR': 'r', 'KeyF': 'f',
+            'KeyT': 't', 'KeyL': 'l', 'Space': 'space'
+        };
+        if (e.code && codeMap[e.code]) {
+            return codeMap[e.code];
+        }
+        // フォールバック: e.key
+        const k = (e.key || '').toLowerCase();
+        if (k === ' ' || k === 'space') return 'space';
+        if (k === 'ｔ') return 't';
+        if (k === 'ｌ') return 'l';
+        if (k === 'ｗ') return 'w';
+        if (k === 'ｓ') return 's';
+        if (k === 'ａ') return 'a';
+        if (k === 'ｄ') return 'd';
+        if (k === 'ｑ') return 'q';
+        if (k === 'ｅ') return 'e';
+        if (k === 'ｒ') return 'r';
+        if (k === 'ｆ') return 'f';
+        return k;
+    },
+
     _onKeyDown(e) {
         if (!this.enabled) return;
-        // テキスト入力中はキーボード操作を無効化
-        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+        // 入力フォームでの文字入力中はキーボード操縦を無効化 (スライダーやボタンは操縦可能)
+        if (e.target.tagName === 'TEXTAREA' || (e.target.tagName === 'INPUT' && ['text', 'search', 'password', 'email', 'number'].includes(e.target.type))) {
+            return;
+        }
 
-        const key = e.key.toLowerCase();
+        const normKey = this._normalizeKey(e);
 
-        // 単発キー (T: 離陸, L: 着陸, Space: 緊急停止)
-        if (this.SINGLE_KEYS.has(key)) {
+        // 単発キー (t: 離陸, l: 着陸, space: 緊急停止)
+        if (this.SINGLE_KEYS.has(normKey) || normKey === 'space') {
             e.preventDefault();
-            const mappedKey = key === ' ' ? 'space' : key;
-            this.triggerSingle(mappedKey);
+            this.triggerSingle(normKey);
             return;
         }
 
         // RC制御キー（長押しリピート時の二重送信を防止）
-        if (this.RC_KEYS.has(key) && !this.pressedKeys.has(key)) {
+        if (this.RC_KEYS.has(normKey) && !this.pressedKeys.has(normKey)) {
             e.preventDefault();
-            this.pressKey(key);
+            this.pressKey(normKey);
         }
     },
 
     _onKeyUp(e) {
         if (!this.enabled) return;
-        const key = e.key.toLowerCase();
+        const normKey = this._normalizeKey(e);
 
-        if (this.RC_KEYS.has(key) && this.pressedKeys.has(key)) {
+        if (this.RC_KEYS.has(normKey) && this.pressedKeys.has(normKey)) {
             e.preventDefault();
-            this.releaseKey(key);
+            this.releaseKey(normKey);
         }
     },
 
@@ -74,7 +101,15 @@ const Controls = {
      * 単発コマンド実行
      */
     triggerSingle(key) {
-        App.wsSend({ type: 'keyboard', action: 'single', key });
+        if (key === 't') {
+            App.handleTakeoff();
+        } else if (key === 'l') {
+            App.handleLand();
+        } else if (key === 'space') {
+            App.handleEmergency();
+        } else {
+            App.wsSend({ type: 'keyboard', action: 'single', key });
+        }
         this._highlightKey(key, true);
         this._vibrate(20);
         setTimeout(() => this._highlightKey(key, false), 200);
@@ -111,7 +146,13 @@ const Controls = {
 
             const onStart = (e) => {
                 e.preventDefault();
-                if (this.SINGLE_KEYS.has(key) || key === 'space') {
+                if (key === 't') {
+                    App.handleTakeoff();
+                } else if (key === 'l') {
+                    App.handleLand();
+                } else if (key === 'space') {
+                    App.handleEmergency();
+                } else if (this.SINGLE_KEYS.has(key)) {
                     this.triggerSingle(key);
                 } else if (this.RC_KEYS.has(key)) {
                     this.pressKey(key);
@@ -140,12 +181,12 @@ const Controls = {
             btn.addEventListener('contextmenu', (e) => e.preventDefault());
         };
 
-        // .key および .vpad-btn 全てにバインド
-        document.querySelectorAll('.key[data-key], .vpad-btn[data-key]').forEach(attachButtonEvents);
+        // 画面上のすべての [data-key] 要素（キーガイド、仮想D-Pad、離陸・着陸ボタン）にバインド
+        document.querySelectorAll('[data-key]').forEach(attachButtonEvents);
     },
 
     _highlightKey(key, active) {
-        document.querySelectorAll(`.key[data-key="${key}"], .vpad-btn[data-key="${key}"]`).forEach((el) => {
+        document.querySelectorAll(`[data-key="${key}"]`).forEach((el) => {
             if (active) {
                 el.classList.add('active');
             } else {

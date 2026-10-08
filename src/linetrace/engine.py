@@ -62,15 +62,22 @@ class LineTraceParams:
     min_line_length: int = 15     # LSD検出線分の最小長 (ピクセル)
 
     # 制御パラメータ
-    forward_speed: int = 15       # 基準前進速度 (0-100)
-    deadzone: float = 20.0        # 不感帯 (ピクセル)
-    yaw_limit: float = 60.0       # 旋回リミット (-100〜100)
+    forward_speed: int = 12       # 基準前進速度 (0-100, 初期値12でふらつきを防止)
+    deadzone: float = 15.0        # 不感帯 (ピクセル, スムースランプ適用)
+    yaw_limit: float = 35.0       # 旋回リミット (-100〜100, 急旋回・過回転を防止)
+    lr_limit: float = 25.0        # 改造機体 横移動リミット
 
-    # ゲイン設定
-    kp_yaw_standard: float = 0.35
-    kd_yaw_standard: float = 0.40
-    kp_lr_downward: float = 0.25
-    kp_yaw_downward: float = 0.60
+    # ゲイン設定 (ふらふら防止チューニング)
+    kp_yaw_standard: float = 0.18 # 旋回Pゲイン (0.35から適正化しハンチングを排除)
+    kd_yaw_standard: float = 0.25 # 角度先行Dゲイン
+    kd_damping: float = 0.20      # オフセット速度ダンピング (オーバーシュート制動)
+    kp_lr_downward: float = 0.16  # 改造機体 横移動Pゲイン
+    kp_yaw_downward: float = 0.35 # 改造機体 旋回Pゲイン
+
+    # スムージング & 自動復帰設定
+    ema_alpha: float = 0.35       # EMA平滑化係数 (0.0〜1.0)
+    auto_recovery: bool = True    # ラインロスト時の自動探索・復帰機能
+    search_yaw_speed: int = 18    # 自動探索時の旋回速度
 
     # ROI設定 (通常機体)
     roi_top_ratio_standard: float = 0.50
@@ -99,6 +106,8 @@ class LineTraceResult:
     lr_value: int = 0
     yaw_value: int = 0
     segments_count: int = 0
+    tracking_state: str = 'tracking'  # 'tracking', 'stabilizing', 'searching', 'lost', 'idle'
+    status_message: str = ''
     # 処理済みデバッグ画像
     debug_frame: Optional[np.ndarray] = None
 
@@ -111,6 +120,19 @@ class LineTraceEngine:
         self.active = False
         self._last_result = LineTraceResult()
         self._prev_target: Optional[Tuple[float, float]] = None
+
+        # 制御平滑化・ダンピング用状態
+        self._prev_offset_dx: Optional[float] = None
+        self._prev_time: float = 0.0
+        self._filtered_lr: float = 0.0
+        self._filtered_fb: float = 0.0
+        self._filtered_yaw: float = 0.0
+
+        # ラインロスト・自動復帰用状態
+        self._last_seen_time: float = 0.0
+        self._last_seen_dx: float = 0.0
+        self._last_seen_angle: float = 0.0
+        self._last_corner_dir: str = 'none'
 
     def set_params(self, params_dict: Dict[str, Any]) -> None:
         """パラメータ一括設定"""
@@ -155,12 +177,16 @@ class LineTraceEngine:
             'forward_speed': self.params.forward_speed,
             'deadzone': self.params.deadzone,
             'yaw_limit': self.params.yaw_limit,
+            'kp_yaw_standard': self.params.kp_yaw_standard,
+            'kd_damping': self.params.kd_damping,
+            'auto_recovery': self.params.auto_recovery,
             'active': self.active,
         }
 
     def process_frame(self, frame: np.ndarray) -> LineTraceResult:
         """
         フレームを処理してライン検出結果を返す。
+        ダンピング制動、EMA平滑化、およびラインロスト時の自動復帰スキャンを統合。
 
         Args:
             frame: BGR画像 (numpy配列)
@@ -168,8 +194,14 @@ class LineTraceEngine:
         Returns:
             LineTraceResult
         """
+        import time
         result = LineTraceResult()
         p = self.params
+
+        now = time.time()
+        dt = (now - self._prev_time) if self._prev_time > 0 else 0.033
+        dt = max(0.01, min(0.2, dt))
+        self._prev_time = now
 
         try:
             detected, info, debug = LineTraceAlgorithm.process_image(
@@ -183,16 +215,147 @@ class LineTraceEngine:
             result.angle_deg = info['angle_deg']
             result.is_corner = info['is_corner']
             result.corner_dir = info['corner_dir']
-            result.forward_speed = info['forward_speed']
-            result.lr_value = info['lr_value']
-            result.yaw_value = info['yaw_value']
             result.segments_count = info['segments_count']
             result.debug_frame = debug
 
             if detected:
                 self._prev_target = (float(info['center_x']), float(info['center_y']))
+                self._last_seen_time = now
+                self._last_seen_dx = float(info['offset_dx'])
+                self._last_seen_angle = float(info['angle_deg'])
+                self._last_corner_dir = str(info['corner_dir'])
+
+                is_first_detection = (self._prev_offset_dx is None)
+                curr_dx = float(info['offset_dx'])
+                if not is_first_detection and dt > 1e-4:
+                    d_dx = (curr_dx - self._prev_offset_dx) / dt
+                else:
+                    d_dx = 0.0
+                self._prev_offset_dx = curr_dx
+
+                # 1. ダンピング項の算出 (PD制御: オフセット変化率による逆トルク制動)
+                # 中央へ急速に戻っている時(d_dx < 0)は正の旋回を抑制(ブレーキ)し、オーバーシュートを防ぐ
+                kd_damp = getattr(p, 'kd_damping', 0.015)
+                damping_yaw = max(-15.0, min(15.0, d_dx * kd_damp))
+
+                # 2. 基本指令値 (P項 + D項ダンピング適用とリミット)
+                raw_yaw = float(info['yaw_value']) + damping_yaw
+                yaw_limit = float(getattr(p, 'yaw_limit', 35.0))
+                raw_yaw = max(-yaw_limit, min(yaw_limit, raw_yaw))
+
+                raw_lr = float(info['lr_value'])
+                if p.camera_mode == "downward":
+                    damping_lr = max(-10.0, min(10.0, d_dx * 0.01))
+                    raw_lr += damping_lr
+                    lr_limit = float(getattr(p, 'lr_limit', 25.0))
+                    raw_lr = max(-lr_limit, min(lr_limit, raw_lr))
+
+                raw_fb = float(info['forward_speed'])
+
+                # 3. EMA (指数移動平均) フィルタで高周波のふらつきを平滑化
+                # 初回検出時は過去値がないためウォームスタートで即応性を確保
+                alpha = getattr(p, 'ema_alpha', 0.35)
+                if is_first_detection:
+                    self._filtered_yaw = raw_yaw
+                    self._filtered_lr = raw_lr
+                    self._filtered_fb = raw_fb
+                else:
+                    self._filtered_yaw = alpha * raw_yaw + (1.0 - alpha) * self._filtered_yaw
+                    self._filtered_lr = alpha * raw_lr + (1.0 - alpha) * self._filtered_lr
+                    self._filtered_fb = alpha * raw_fb + (1.0 - alpha) * self._filtered_fb
+
+                result.lr_value = int(round(self._filtered_lr))
+                result.forward_speed = int(round(self._filtered_fb))
+                result.yaw_value = int(round(self._filtered_yaw))
+                result.tracking_state = 'tracking'
+                result.status_message = 'ライン追従中'
+
             else:
                 self._prev_target = None
+                self._prev_offset_dx = None
+
+                # ラインロスト時の処理
+                if self.active and p.auto_recovery and self._last_seen_time > 0:
+                    lost_sec = now - self._last_seen_time
+
+                    if lost_sec < 0.5:
+                        # Phase 1: 慣性減速・ホバリング安定化 (0.0s〜0.5s)
+                        self._filtered_lr = 0.0
+                        self._filtered_fb = 0.0
+                        self._filtered_yaw = 0.0
+                        result.lr_value = 0
+                        result.forward_speed = 0
+                        result.yaw_value = 0
+                        result.tracking_state = 'stabilizing'
+                        result.status_message = '姿勢安定化中 (ホバリング)'
+
+                    elif lost_sec < 2.5:
+                        # Phase 2: 直前見失い方向への自動スキャン探索 (0.5s〜2.5s)
+                        if self._last_corner_dir == 'right' or self._last_seen_dx > 10.0 or self._last_seen_angle > 10.0:
+                            search_dir = 1   # 右探索
+                        else:
+                            search_dir = -1  # 左探索
+
+                        search_speed = getattr(p, 'search_yaw_speed', 18)
+                        if p.camera_mode == "downward":
+                            result.lr_value = int(search_dir * 16)
+                            result.yaw_value = int(search_dir * 12)
+                        else:
+                            result.lr_value = 0
+                            result.yaw_value = int(search_dir * search_speed)
+
+                        result.forward_speed = 0
+                        result.tracking_state = 'searching'
+                        dir_str = "右" if search_dir > 0 else "左"
+                        result.status_message = f'自動探索中: {dir_str}方向スキャン'
+
+                    elif lost_sec < 4.5:
+                        # Phase 3: 逆方向反転スキャン (2.5s〜4.5s)
+                        if self._last_corner_dir == 'right' or self._last_seen_dx > 10.0 or self._last_seen_angle > 10.0:
+                            search_dir = -1  # 反転して左
+                        else:
+                            search_dir = 1   # 反転して右
+
+                        search_speed = getattr(p, 'search_yaw_speed', 18)
+                        if p.camera_mode == "downward":
+                            result.lr_value = int(search_dir * 14)
+                            result.yaw_value = int(search_dir * 10)
+                        else:
+                            result.lr_value = 0
+                            result.yaw_value = int(search_dir * search_speed)
+
+                        result.forward_speed = 0
+                        result.tracking_state = 'searching'
+                        dir_str = "右" if search_dir > 0 else "左"
+                        result.status_message = f'自動探索中: {dir_str}方向反転スキャン'
+
+                    else:
+                        # Phase 4: 完全ロスト・安全ホバリング待機 (4.5s超)
+                        self._filtered_lr = 0.0
+                        self._filtered_fb = 0.0
+                        self._filtered_yaw = 0.0
+                        result.lr_value = 0
+                        result.forward_speed = 0
+                        result.yaw_value = 0
+                        result.tracking_state = 'lost'
+                        result.status_message = 'ラインロスト: 安全ホバリング待機中'
+
+                else:
+                    # 初期状態または未追従時の未検出
+                    self._filtered_lr = 0.0
+                    self._filtered_fb = 0.0
+                    self._filtered_yaw = 0.0
+                    result.lr_value = 0
+                    result.forward_speed = 0
+                    result.yaw_value = 0
+                    result.tracking_state = 'idle'
+                    result.status_message = '未検出'
+
+                # デバッグ画面に探索・ロスト状態をオーバーレイ描画
+                if debug is not None and result.status_message:
+                    h, w = debug.shape[:2]
+                    color = (0, 255, 255) if result.tracking_state == 'searching' else (0, 0, 255)
+                    cv2.putText(debug, result.status_message, (10, h - 20), cv2.FONT_HERSHEY_PLAIN, 1.2, color, 2)
 
         except Exception as e:
             logger.error(f"LineTrace処理エラー: {e}")
@@ -208,12 +371,19 @@ class LineTraceEngine:
             {'lr': lr_val, 'fb': fb_val, 'ud': 0, 'yaw': yaw_val}
         """
         r = result or self._last_result
-        if not self.active or not r.detected:
+        if not self.active:
+            return {'lr': 0, 'fb': 0, 'ud': 0, 'yaw': 0}
+
+        # 安全確保: 前進(fb)はライン検出中のみ許可。探索・ロスト・安定化中は必ずゼロ
+        fb = r.forward_speed if r.detected else 0
+
+        # ロスト・未追従・安定化中は全RCゼロ
+        if not r.detected and r.tracking_state in ('lost', 'idle', 'stabilizing'):
             return {'lr': 0, 'fb': 0, 'ud': 0, 'yaw': 0}
 
         return {
             'lr': r.lr_value,
-            'fb': r.forward_speed,
+            'fb': fb,
             'ud': 0,
             'yaw': r.yaw_value,
         }
@@ -233,4 +403,6 @@ class LineTraceEngine:
             'lr_value': r.lr_value,
             'yaw_value': r.yaw_value,
             'segments_count': r.segments_count,
+            'tracking_state': r.tracking_state,
+            'status_message': r.status_message,
         }

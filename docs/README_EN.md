@@ -201,9 +201,18 @@ When accessing the web app from a touchscreen device over the local network:
 5. Toggle **LineTrace Display** to view detected line segments and heading vectors on the video stream.
 6. Toggle **LineTrace Control** to enable autonomous tracking.
 
-#### Safety Failsafes
-- **Line Loss**: If the line moves outside the camera frame, forward motion and steering are instantly zeroed, putting the drone into a safe stationary hover.
-- **Corner Detection**: When perpendicular line segments (sharp 90-degree corners) are detected, forward velocity is automatically reduced (≤5) to prevent overshoot.
+#### Stabilization and Safety Features (Failsafe & Auto-Recovery)
+- **Anti-Wobble Stabilization**:
+  - **Smooth Deadzone Ramp**: Eliminates sudden torque jumps at deadband boundaries, ensuring gentle transitions.
+  - **PD Damping Brake**: Detects approach velocity toward center and applies reverse damping torque ($\frac{d(dx)}{dt}$) to arrest rotational inertia and eliminate overshoot oscillation.
+  - **EMA Smoothing Filter**: Applies Exponential Moving Average to yaw/roll control values, rejecting high-frequency vision jitter for stable, steady flight.
+  - **Smart Corner & Deviation Deceleration**: Automatically reduces forward speed during tight turns or significant offset to prevent centrifugal course-out.
+- **Auto-Recovery State Machine (Line Lost)**:
+  - **Phase 1 (0.0s - 0.5s) Inertia Stabilization**: Instantly cuts forward speed to 0 and commands neutral hover to cancel forward momentum.
+  - **Phase 2 (0.5s - 2.5s) Last-Seen Direction Scan**: Autonomously turns the drone's head toward the side where the line was last visible.
+  - **Phase 3 (2.5s - 4.5s) Reverse Direction Scan**: Scans in the opposite direction if still unacquired.
+  - **Phase 4 (>4.5s) Safe Hover Standby**: Holds a stationary hover if the line remains undetected.
+  - **Autonomous Resumption**: Once the line reappears in the camera frame, tracking seamlessly resumes **without manual operator intervention** (forward speed strictly remains 0 during scanning to prevent runaway collisions).
 
 ---
 

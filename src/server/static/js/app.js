@@ -87,6 +87,8 @@ const App = {
         }
     },
 
+    _reconnectTimer: null,
+
     // =========================================================================
     // WebSocket
     // =========================================================================
@@ -94,39 +96,92 @@ const App = {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const base = `${proto}//${location.host}/ws`;
 
-        // Control WS
-        this.ws = new WebSocket(`${base}/control`);
-        this.ws.onopen = () => {
-            console.log('WS control connected');
-            const wsStatus = document.getElementById('footerWsStatus');
-            if (wsStatus) {
-                wsStatus.textContent = '接続済';
-                wsStatus.className = 'stat-value text-success';
-            }
-            
-            // 接続時にPashatoku設定を送信
-            const userInp = document.getElementById('qrUserName');
-            const studentInp = document.getElementById('qrStudentId');
-            if (userInp && studentInp) {
-                this.wsSend({ type: 'pashatoku_creds', user_name: userInp.value, student_id: studentInp.value });
-            }
-        };
-        this.ws.onmessage = (e) => this._handleWSMessage(JSON.parse(e.data));
-        this.ws.onclose = () => {
-            console.log('WS control disconnected');
-            const wsStatus = document.getElementById('footerWsStatus');
-            if (wsStatus) {
-                wsStatus.textContent = '切断';
-                wsStatus.className = 'stat-value text-muted';
-            }
-            // 自動再接続
-            setTimeout(() => this.connectWS(), 3000);
-        };
-        this.ws.onerror = (e) => console.error('WS error', e);
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
 
-        // Telemetry WS
-        this.wsTelemetry = new WebSocket(`${base}/telemetry`);
-        this.wsTelemetry.onmessage = (e) => this._handleTelemetry(JSON.parse(e.data));
+        // 既存ソケットの安全なクリーンアップ
+        if (this.ws) {
+            this.ws.onopen = null;
+            this.ws.onmessage = null;
+            this.ws.onclose = null;
+            this.ws.onerror = null;
+            try { this.ws.close(); } catch (_) {}
+            this.ws = null;
+        }
+        if (this.wsTelemetry) {
+            this.wsTelemetry.onopen = null;
+            this.wsTelemetry.onmessage = null;
+            this.wsTelemetry.onclose = null;
+            this.wsTelemetry.onerror = null;
+            try { this.wsTelemetry.close(); } catch (_) {}
+            this.wsTelemetry = null;
+        }
+
+        try {
+            // Control WS
+            this.ws = new WebSocket(`${base}/control`);
+            this.ws.onopen = () => {
+                console.log('WS control connected');
+                const wsStatus = document.getElementById('footerWsStatus');
+                if (wsStatus) {
+                    wsStatus.textContent = '接続済';
+                    wsStatus.className = 'stat-value text-success';
+                }
+                
+                // 接続時にPashatoku設定を送信
+                const userInp = document.getElementById('qrUserName');
+                const studentInp = document.getElementById('qrStudentId');
+                if (userInp && studentInp) {
+                    this.wsSend({ type: 'pashatoku_creds', user_name: userInp.value, student_id: studentInp.value });
+                }
+            };
+            this.ws.onmessage = (e) => {
+                try {
+                    this._handleWSMessage(JSON.parse(e.data));
+                } catch (err) {
+                    console.error('WS parse error:', err);
+                }
+            };
+            this.ws.onclose = () => {
+                const wsStatus = document.getElementById('footerWsStatus');
+                if (wsStatus) {
+                    wsStatus.textContent = '切断';
+                    wsStatus.className = 'stat-value text-muted';
+                }
+                this._scheduleReconnect();
+            };
+            this.ws.onerror = () => {
+                // 再接続ハンドラ(_scheduleReconnect)に任せ、コンソール過剰出力を抑止
+            };
+
+            // Telemetry WS
+            this.wsTelemetry = new WebSocket(`${base}/telemetry`);
+            this.wsTelemetry.onmessage = (e) => {
+                try {
+                    this._handleTelemetry(JSON.parse(e.data));
+                } catch (err) {
+                    console.error('Telemetry parse error:', err);
+                }
+            };
+            this.wsTelemetry.onclose = () => {
+                this._scheduleReconnect();
+            };
+            this.wsTelemetry.onerror = () => {};
+
+        } catch (e) {
+            this._scheduleReconnect();
+        }
+    },
+
+    _scheduleReconnect() {
+        if (!this._reconnectTimer) {
+            this._reconnectTimer = setTimeout(() => {
+                this._reconnectTimer = null;
+                this.connectWS();
+            }, 3000);
+        }
     },
 
     wsSend(msg) {
@@ -135,11 +190,71 @@ const App = {
         }
     },
 
+    async handleConnect() {
+        const ip = document.getElementById('networkInterface')?.value || '';
+        this.notify('Tello へ接続要求を送信中...', 'info', 2500);
+
+        const btn = document.getElementById('btnConnect');
+        if (btn) btn.disabled = true;
+
+        try {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.wsSend({ type: 'connect', local_ip: ip });
+            } else {
+                const res = await this.api('POST', '/connect', { local_ip: ip });
+                if (res && res.success) {
+                    this.connected = true;
+                    this._updateConnectionUI(true);
+                    this._updateStatus(res.status);
+                    this.notify('Tello に接続しました', 'success');
+                    if (typeof QRManager !== 'undefined') QRManager.loadLinks();
+                } else {
+                    this.notify('Tello の接続に失敗しました', 'error');
+                }
+            }
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    },
+
+    async handleDisconnect() {
+        this.notify('Tello から切断処理中...', 'info', 1500);
+
+        const btn = document.getElementById('btnConnect');
+        if (btn) btn.disabled = true;
+
+        try {
+            // 1. WebSocket 経由で切断要求送信
+            this.wsSend({ type: 'disconnect' });
+
+            // 2. HTTP API 経由でも切断要求 (WS切断時や再接続中でも確実に反映)
+            await this.api('POST', '/disconnect');
+        } catch (e) {
+            console.warn('切断要求フォールバック:', e);
+        } finally {
+            // 3. UIと内部状態を確実に即座リセット
+            this.connected = false;
+            this.flying = false;
+            this._updateConnectionUI(false);
+            this._resetTelemetryUI();
+            if (btn) btn.disabled = false;
+            this.notify('Tello から切断しました', 'info');
+            this.loadInterfaces();
+        }
+    },
+
     _handleWSMessage(msg) {
         const type = msg.type;
 
         if (type === 'status') {
             this._updateStatus(msg.data);
+        } else if (type === 'connection_lost') {
+            this.connected = false;
+            this.flying = false;
+            this._updateConnectionUI(false);
+            this._resetTelemetryUI();
+            this.notify(msg.message || 'Telloとの通信が途絶しました（バッテリー切れ・切断）', 'warning', 5000);
+            this.loadInterfaces();
         } else if (type === 'connect_response') {
             if (msg.success) {
                 this.connected = true;
@@ -161,20 +276,24 @@ const App = {
         } else if (type === 'takeoff_response') {
             if (msg.success) {
                 this.flying = true;
-                this.notify('離陸しました', 'success');
+                this.notify(msg.message || '離陸しました', 'success');
             } else {
-                this.notify('離陸に失敗しました', 'error');
+                this.notify(msg.message || '離陸に失敗しました', 'error', 4500);
             }
         } else if (type === 'land_response') {
             if (msg.success) {
                 this.flying = false;
-                this.notify('着陸しました', 'success');
+                this.notify(msg.message || '着陸しました', 'success');
+            } else {
+                this.notify(msg.message || '着陸に失敗しました', 'error', 4000);
             }
         } else if (type === 'emergency_response') {
             this.flying = false;
-            this.notify('緊急停止を実行しました', 'warning');
+            this.notify(msg.message || '緊急停止を実行しました', 'warning');
         } else if (type === 'keyboard_response') {
-            // silent
+            if (!msg.success && msg.message) {
+                this.notify(msg.message, 'warning', 4000);
+            }
         } else if (type === 'video_response') {
             if (msg.success) {
                 VideoManager.showStream();
@@ -365,6 +484,23 @@ const App = {
             console.error('フライトログダウンロードエラー:', e);
             App.notify('フライトログのダウンロードに失敗しました', 'error');
         }
+    },
+
+    handleTakeoff() {
+        this.notify('離陸コマンド送信中...', 'info', 2500);
+        this.wsSend({ type: 'takeoff' });
+    },
+
+    handleLand() {
+        this.notify('着陸コマンド送信中...', 'info', 2000);
+        this.wsSend({ type: 'land' });
+    },
+
+    handleEmergency() {
+        if (confirm('緊急停止を実行しますか？モーターが即停止し落下します。')) {
+            this.notify('非常停止を実行しました', 'warning');
+            this.wsSend({ type: 'emergency' });
+        }
     }
 };
 
@@ -547,36 +683,36 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btnConnect) {
         btnConnect.addEventListener('click', () => {
             if (App.connected) {
-                App.wsSend({ type: 'disconnect' });
+                App.handleDisconnect();
             } else {
-                const ip = document.getElementById('networkInterface').value;
-                App.wsSend({ type: 'connect', local_ip: ip });
+                App.handleConnect();
             }
         });
     }
 
-    const btnTakeoff = document.getElementById('btnTakeoff');
-    if (btnTakeoff) {
-        btnTakeoff.addEventListener('click', () => {
-            App.wsSend({ type: 'takeoff' });
+    ['btnTakeoff', 'btnTouchTakeoff'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', (e) => {
+            if (e) e.preventDefault();
+            App.handleTakeoff();
         });
-    }
+    });
 
-    const btnLand = document.getElementById('btnLand');
-    if (btnLand) {
-        btnLand.addEventListener('click', () => {
-            App.wsSend({ type: 'land' });
+    ['btnLand', 'btnTouchLand'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', (e) => {
+            if (e) e.preventDefault();
+            App.handleLand();
         });
-    }
+    });
 
-    const btnEmergency = document.getElementById('btnEmergency');
-    if (btnEmergency) {
-        btnEmergency.addEventListener('click', () => {
-            if (confirm('緊急停止を実行しますか？モーターが即停止します。')) {
-                App.wsSend({ type: 'emergency' });
-            }
+    ['btnEmergency', 'btnTouchEmergency'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('click', (e) => {
+            if (e) e.preventDefault();
+            App.handleEmergency();
         });
-    }
+    });
 
     const btnVideoStart = document.getElementById('btnVideoStart');
     if (btnVideoStart) {

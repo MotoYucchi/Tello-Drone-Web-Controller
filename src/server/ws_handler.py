@@ -100,7 +100,7 @@ async def ws_control(ws: WebSocket):
 
 @websocket_router.websocket("/telemetry")
 async def ws_telemetry(ws: WebSocket):
-    """テレメトリ配信WebSocket (1秒間隔)"""
+    """テレメトリ配信WebSocket (1秒間隔) + 死活監視"""
     await manager.connect(ws)
 
     try:
@@ -109,6 +109,32 @@ async def ws_telemetry(ws: WebSocket):
             state_recv = _app_state.get('state_receiver')
             video = _app_state.get('video')
             lt = _app_state.get('linetrace')
+            fl = _app_state.get('logger')
+
+            # 死活監視: 接続中なのにテレメトリパケットが途絶した場合 (バッテリー切れ・Wi-Fi切断)
+            if tello and tello.is_connected and state_recv:
+                if state_recv.last_packet_time > 0 and (time.time() - state_recv.last_packet_time > 3.5):
+                    logger.warning("Telloテレメトリ途絶検知 (バッテリー切れまたは接続切れ)。自動クリーンアップを実行します。")
+                    tello.is_connected = False
+                    tello.is_flying = False
+                    if lt:
+                        lt.active = False
+                    if video and video.streaming:
+                        video.stop()
+                    state_recv.stop()
+                    if fl:
+                        fl.log_event("Connection lost (heartbeat timeout)")
+                        fl.stop_session()
+                    await asyncio.to_thread(tello.disconnect, True)
+                    # 全クライアントに切断通知をブロードキャスト
+                    await manager.broadcast({
+                        'type': 'connection_lost',
+                        'message': 'Telloとの通信が途絶しました（バッテリー切れまたはWi-Fi切断）'
+                    })
+                    await manager.broadcast({
+                        'type': 'status',
+                        'data': tello.get_status()
+                    })
 
             data = {
                 'type': 'telemetry',
@@ -164,13 +190,15 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             _app_state['linetrace'].active = False
             video = _app_state['video']
             if video.streaming:
-                await asyncio.to_thread(tello.stream_off)
+                await asyncio.to_thread(tello.stream_off, False)
                 video.stop()
             _app_state['state_receiver'].stop()
             if fl:
                 fl.log_event("Disconnected via WS")
                 fl.stop_session()
-            success = await asyncio.to_thread(tello.disconnect)
+            success = await asyncio.to_thread(tello.disconnect, True)
+            # 全クライアントに切断完了ステータスを即時通知
+            await manager.broadcast({'type': 'status', 'data': tello.get_status()})
             return {'type': 'disconnect_response', 'success': success}
 
         elif msg_type == 'keyboard':
@@ -196,15 +224,36 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         elif msg_type == 'takeoff':
             tello = _app_state['tello']
+            if not tello.is_connected:
+                logger.info("未接続状態での離陸要求: 自動接続を試みます...")
+                connected = await asyncio.to_thread(tello.connect)
+                if connected:
+                    state_recv = _app_state.get('state_receiver')
+                    if state_recv:
+                        state_recv.local_ip = tello.local_ip
+                        state_recv.start()
+                    if fl:
+                        fl.start_session()
+                        fl.log_event("Auto-connected via Takeoff")
+                else:
+                    return {
+                        'type': 'takeoff_response',
+                        'success': False,
+                        'message': 'Telloに接続できませんでした。PCがTelloのWi-Fi(TELLO-XXXXXX)に接続されているか確認してください。'
+                    }
+
             if fl:
                 fl.log_event("Takeoff requested via WS")
             success = await asyncio.to_thread(tello.takeoff)
             if fl and success:
                 fl.log_event("Takeoff success")
-            return {'type': 'takeoff_response', 'success': success}
+            msg_text = '離陸しました' if success else '離陸に失敗しました（バッテリー残量や機体状態を確認してください）'
+            return {'type': 'takeoff_response', 'success': success, 'message': msg_text}
 
         elif msg_type == 'land':
             tello = _app_state['tello']
+            if not tello.is_connected:
+                return {'type': 'land_response', 'success': False, 'message': 'Telloに未接続です'}
             _app_state['linetrace'].active = False
             if fl:
                 fl.log_event("Land requested via WS")
@@ -212,7 +261,8 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if fl and success:
                 fl.log_event("Land success")
                 fl.update_rc(0, 0, 0, 0, mode="idle")
-            return {'type': 'land_response', 'success': success}
+            msg_text = '着陸しました' if success else '着陸コマンド送信失敗'
+            return {'type': 'land_response', 'success': success, 'message': msg_text}
 
         elif msg_type == 'emergency':
             tello = _app_state['tello']
@@ -221,7 +271,7 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 fl.log_event("EMERGENCY via WS")
                 fl.update_rc(0, 0, 0, 0, mode="idle")
             success = await asyncio.to_thread(tello.emergency)
-            return {'type': 'emergency_response', 'success': success}
+            return {'type': 'emergency_response', 'success': success, 'message': '非常停止を実行しました'}
 
         elif msg_type == 'video_start':
             tello = _app_state['tello']
@@ -330,22 +380,44 @@ async def _handle_keyboard(msg: Dict[str, Any]) -> Dict[str, Any]:
     # 単発キー
     if action == 'single':
         if key == 't':
+            if not tello.is_connected:
+                logger.info("未接続状態でのキー'T'離陸要求: 自動接続を試みます...")
+                connected = await asyncio.to_thread(tello.connect)
+                if connected:
+                    state_recv = _app_state.get('state_receiver')
+                    if state_recv:
+                        state_recv.local_ip = tello.local_ip
+                        state_recv.start()
+                    if fl:
+                        fl.start_session()
+                        fl.log_event("Auto-connected via Key 'T'")
+                else:
+                    return {
+                        'type': 'keyboard_response',
+                        'success': False,
+                        'message': 'Telloに接続できませんでした。PCがTelloのWi-Fi(TELLO-XXXXXX)に接続されているか確認してください。',
+                        'action': 'takeoff'
+                    }
             if fl:
                 fl.log_event("Takeoff via Key 'T'")
             success = await asyncio.to_thread(tello.takeoff)
-            return {'type': 'keyboard_response', 'success': success, 'action': 'takeoff'}
+            msg_text = '離陸しました' if success else '離陸に失敗しました（バッテリー残量や機体状態を確認してください）'
+            return {'type': 'keyboard_response', 'success': success, 'action': 'takeoff', 'message': msg_text}
         elif key == 'l':
+            if not tello.is_connected:
+                return {'type': 'keyboard_response', 'success': False, 'message': 'Telloに未接続です', 'action': 'land'}
             _app_state['linetrace'].active = False
             if fl:
                 fl.log_event("Land via Key 'L'")
             success = await asyncio.to_thread(tello.land)
-            return {'type': 'keyboard_response', 'success': success, 'action': 'land'}
+            msg_text = '着陸しました' if success else '着陸コマンド送信失敗'
+            return {'type': 'keyboard_response', 'success': success, 'action': 'land', 'message': msg_text}
         elif key == 'space':
             _app_state['linetrace'].active = False
             if fl:
                 fl.log_event("EMERGENCY via Space")
             success = await asyncio.to_thread(tello.emergency)
-            return {'type': 'keyboard_response', 'success': success, 'action': 'emergency'}
+            return {'type': 'keyboard_response', 'success': success, 'action': 'emergency', 'message': '非常停止を実行しました'}
 
     # RC制御キー（press/release で連続制御）
     if not hasattr(_handle_keyboard, '_keys'):

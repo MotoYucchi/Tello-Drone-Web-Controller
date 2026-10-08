@@ -132,12 +132,21 @@ const LineTraceUI = {
         if (!el || !result) return;
 
         if (result.detected) {
-            let text = `検出中 (dx:${result.offset_dx > 0 ? '+' : ''}${Math.round(result.offset_dx)}px, ${Math.round(result.angle_deg)}°)`;
+            let text = `追従中 (dx:${result.offset_dx > 0 ? '+' : ''}${Math.round(result.offset_dx)}px, ${Math.round(result.angle_deg)}°)`;
             if (result.is_corner) {
                 text += ` [直角:${result.corner_dir === 'right' ? '右' : '左'}]`;
             }
             el.textContent = text;
-            el.style.color = '#4ade80'; // green
+            el.style.color = '#4ade80'; // 明るいグリーン
+        } else if (result.tracking_state === 'searching') {
+            el.textContent = result.status_message || 'ライン自動探索中...';
+            el.style.color = '#facc15'; // 警告イエロー
+        } else if (result.tracking_state === 'stabilizing') {
+            el.textContent = '姿勢安定化中 (ホバリング)';
+            el.style.color = '#38bdf8'; // スカイブルー
+        } else if (result.tracking_state === 'lost') {
+            el.textContent = 'ライン見失い (ホバリング待機)';
+            el.style.color = '#f87171'; // 注意レッド
         } else {
             el.textContent = '未検出';
             el.style.color = 'var(--text-muted)';

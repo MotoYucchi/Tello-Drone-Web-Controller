@@ -335,53 +335,53 @@ class LineTraceAlgorithm:
         deadzone = getattr(params, 'deadzone', 20.0)
         yaw_limit = getattr(params, 'yaw_limit', 60.0)
 
-        # 不感帯の適用
-        effective_dx = 0.0 if abs(offset_dx) < deadzone else offset_dx
+        # 滑らかな不感帯の適用 (段差ジャンプを排除しゼロから緩やかに立ち上げる)
+        if abs(offset_dx) <= deadzone:
+            effective_dx = 0.0
+        else:
+            effective_dx = math.copysign(abs(offset_dx) - deadzone, offset_dx)
 
         if is_downward:
             # =================================================================
             # 改造機体 (downward: ほぼ真下カメラ)
-            # 真下にラインがあるため、横オフセットは左右移動(lr)でダイレクトに打ち消す
-            # ヨー角(yaw)はラインの向き(target_angle)に機首をアライメントするために使う
+            # 真下にラインがあるため、横オフセットは左右移動(lr)で打ち消す
+            # ヨー角(yaw)はラインの向き(target_angle)に機首をアライメントする
             # =================================================================
-            kp_lr = getattr(params, 'kp_lr_downward', 0.25)
-            kp_yaw = getattr(params, 'kp_yaw_downward', 0.6)
+            kp_lr = getattr(params, 'kp_lr_downward', 0.16)
+            kp_yaw = getattr(params, 'kp_yaw_downward', 0.35)
+            lr_limit = getattr(params, 'lr_limit', 25.0)
 
             # 横移動 (正で右、負で左)
             lr = int(effective_dx * kp_lr)
-            lr = max(-40, min(40, lr))
+            lr = max(-int(lr_limit), min(int(lr_limit), lr))
 
             # 旋回 (ラインの傾き角に合わせる)
-            # target_angle: 右傾きが正 → 時計回り(cw:+yaw)で合わせる
             yaw = int(target_angle * kp_yaw)
             yaw = max(-int(yaw_limit), min(int(yaw_limit), yaw))
 
-            # 前進速度: コーナー検出時は一旦停止・微速にして旋回/横移動を優先
+            # 前進速度: コーナー検出時は減速
             if is_corner:
                 fb = 5
                 if corner_dir == 'right':
-                    yaw = 40
-                    lr = 25
+                    yaw = 30
+                    lr = int(lr_limit)
                 elif corner_dir == 'left':
-                    yaw = -40
-                    lr = -25
+                    yaw = -30
+                    lr = -int(lr_limit)
             else:
                 # 角度ズレやオフセットが大きい場合は前進を減速
-                slowdown = min(1.0, max(0.2, 1.0 - (abs(target_angle) / 90.0) - (abs(effective_dx) / 200.0)))
-                fb = max(5, int(base_speed * slowdown))
+                slowdown = min(0.70, (abs(target_angle) / 60.0) * 0.4 + (abs(effective_dx) / 120.0) * 0.4)
+                fb = max(5, int(base_speed * (1.0 - slowdown)))
 
         else:
             # =================================================================
             # 通常機体 (standard: 前方微下向きカメラ)
-            # ラインは正面下部に見えるため、主に前進(fb) + Yaw旋回で曲がる
-            # lrは0または微小補正
+            # 主に前進(fb) + Yaw旋回で曲がる。Pゲインを抑えてハンチングを排除
             # =================================================================
-            kp_yaw = getattr(params, 'kp_yaw_standard', 0.35)
-            kd_yaw = getattr(params, 'kd_yaw_standard', 0.4)
+            kp_yaw = getattr(params, 'kp_yaw_standard', 0.18)
+            kd_yaw = getattr(params, 'kd_yaw_standard', 0.25)
 
             # Yaw: オフセット補正 + 角度先行制御
-            # 画面右(offset_dx > 0)にラインがあるなら右旋回(+yaw)
-            # ラインが右傾き(target_angle > 0)なら右旋回(+yaw)
             yaw = int((effective_dx * kp_yaw) + (target_angle * kd_yaw))
             yaw = max(-int(yaw_limit), min(int(yaw_limit), yaw))
 
@@ -389,11 +389,11 @@ class LineTraceAlgorithm:
 
             if is_corner:
                 fb = 5
-                yaw = 50 if corner_dir == 'right' else -50
+                yaw = 35 if corner_dir == 'right' else -35
             else:
-                # 旋回量が大きいときは前進を抑制してコースアウトを防止
-                slowdown = max(0.2, 1.0 - (abs(yaw) / float(yaw_limit)))
-                fb = max(5, int(base_speed * slowdown))
+                # 旋回量や横ズレが大きいときは前進を抑制してコースアウトを防止
+                turn_penalty = min(0.70, (abs(yaw) / float(yaw_limit)) * 0.5 + (abs(effective_dx) / 120.0) * 0.4)
+                fb = max(5, int(base_speed * (1.0 - turn_penalty)))
 
         result_info['forward_speed'] = int(fb)
         result_info['lr_value'] = int(lr)
@@ -408,17 +408,20 @@ class LineTraceAlgorithm:
         target_angle: float
     ) -> None:
         """フォールバック (モーメント重心のみ検出時) のRC値算出"""
-        deadzone = getattr(params, 'deadzone', 20.0)
+        deadzone = getattr(params, 'deadzone', 15.0)
         base_speed = getattr(params, 'forward_speed', 10)
-        effective_dx = 0.0 if abs(offset_dx) < deadzone else offset_dx
+        if abs(offset_dx) <= deadzone:
+            effective_dx = 0.0
+        else:
+            effective_dx = math.copysign(abs(offset_dx) - deadzone, offset_dx)
 
         if is_downward:
-            lr = int(effective_dx * 0.2)
-            result_info['lr_value'] = max(-30, min(30, lr))
+            lr = int(effective_dx * 0.15)
+            result_info['lr_value'] = max(-20, min(20, lr))
             result_info['forward_speed'] = max(5, int(base_speed * 0.7))
             result_info['yaw_value'] = 0
         else:
-            yaw = int(effective_dx * 0.3)
+            yaw = int(effective_dx * 0.18)
             result_info['lr_value'] = 0
             result_info['forward_speed'] = max(5, int(base_speed * 0.7))
-            result_info['yaw_value'] = max(-50, min(50, yaw))
+            result_info['yaw_value'] = max(-35, min(35, yaw))

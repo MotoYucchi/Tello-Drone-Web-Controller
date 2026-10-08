@@ -172,3 +172,63 @@ def test_noise_immunity():
     # 主ライン(x=240付近)を追跡していること (ノイズ物体 x=80 に引っ張られない)
     assert abs(result.center_x - 240) < 30
 
+
+def test_anti_wobble_damping():
+    """ふらふら防止: ダンピング制動により急激なオーバーシュートが抑制されることの検証"""
+    import time
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+
+    # 1フレーム目: 右に大きくズレた線 (x=320)
+    img1 = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img1, (320, 360), (320, 100), (0, 0, 255), 14)
+    res1 = engine.process_frame(img1)
+    assert res1.detected is True
+    yaw1 = res1.yaw_value
+
+    # 2フレーム目: 中心に向かって急速に戻っている線 (x=270)
+    # ダンピング制動が働き、旋回指令が抑制されていること
+    time.sleep(0.04)
+    img2 = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img2, (270, 360), (270, 100), (0, 0, 255), 14)
+    res2 = engine.process_frame(img2)
+    assert res2.detected is True
+    # 急速に復帰しているため、yaw指令はyaw1より抑制される
+    assert res2.yaw_value <= yaw1
+
+
+def test_line_lost_auto_recovery_search():
+    """ラインロスト時自動探索: 見失った方向へ自動スキャンし、再捕捉で即座に追従へ復帰することの検証"""
+    import time
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.active = True
+    engine.params.auto_recovery = True
+
+    # 1. 右寄りのラインを追従中 (x=300)
+    img_right = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img_right, (300, 360), (300, 100), (0, 0, 255), 14)
+    res1 = engine.process_frame(img_right)
+    assert res1.detected is True
+    assert res1.tracking_state == 'tracking'
+
+    # 2. ラインをロスト (真っ黒な画像)
+    blank = np.zeros((360, 480, 3), dtype=np.uint8)
+    # 0.6秒経過させて探索フェーズへ
+    engine._last_seen_time = time.time() - 0.8
+    res_search = engine.process_frame(blank)
+
+    assert res_search.detected is False
+    assert res_search.tracking_state == 'searching'
+    # 右にラインがあったので、右方向(yaw > 0)をスキャンしていること
+    rc = engine.get_rc_values(res_search)
+    assert rc['fb'] == 0, "探索中は暴走を防ぐため前進速度はゼロ"
+    assert rc['yaw'] > 0, "直前位置(右)を自動スキャンしていること"
+
+    # 3. ラインが再検出されたら、手動介入なしで即座に追従へ復帰
+    res_reacquired = engine.process_frame(img_right)
+    assert res_reacquired.detected is True
+    assert res_reacquired.tracking_state == 'tracking'
+    assert res_reacquired.forward_speed > 0
+
