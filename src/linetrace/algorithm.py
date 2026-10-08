@@ -388,8 +388,10 @@ class LineTraceAlgorithm:
             lr = 0
 
             if is_corner:
-                fb = 5
-                yaw = 35 if corner_dir == 'right' else -35
+                # コーナーを通り過ぎて見失うのを防ぐため、前進速度を2に落としてその場旋回を優先
+                fb = 2
+                corner_yaw = min(yaw_limit, 40.0)
+                yaw = int(corner_yaw if corner_dir == 'right' else -corner_yaw)
             else:
                 # 旋回量や横ズレが大きいときは前進を抑制してコースアウトを防止
                 turn_penalty = min(0.70, (abs(yaw) / float(yaw_limit)) * 0.5 + (abs(effective_dx) / 120.0) * 0.4)

@@ -98,3 +98,16 @@ def test_flight_logs_api(client):
     dl_resp = client.get("/api/logs/latest")
     assert dl_resp.status_code == 200
     assert dl_resp.headers["content-type"] == "text/csv; charset=utf-8"
+
+
+def test_video_latency_and_buffer_reset_api(client):
+    """映像遅延設定およびバッファリセットAPIのテスト"""
+    # 1. 遅延パラメータ設定
+    resp_lat = client.post("/api/video/latency", json={"low_latency": True, "drain_rate": 2})
+    assert resp_lat.status_code == 200
+    assert resp_lat.json()["success"] is True
+    assert resp_lat.json()["stats"]["drain_rate"] == 2
+
+    # 2. バッファリセット (未ストリーミング時は安全メッセージ返却)
+    resp_reset = client.post("/api/video/reset_buffer")
+    assert resp_reset.status_code == 200

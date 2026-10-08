@@ -76,8 +76,16 @@
                         <button class="btn btn-default btn-sm" id="btnScreenshot" title="静止画をPNGでダウンロード">
                             <i class="fas fa-camera"></i> 撮影
                         </button>
+                        <button class="btn btn-default btn-sm text-warning" id="btnResetVideoBuffer" title="滞留した映像バッファを即時破棄して最新映像に同期">
+                            <i class="fas fa-bolt"></i> 遅延リセット
+                        </button>
                     </div>
                     <div class="video-status-inline">
+                        <select id="videoLatencyMode" class="form-select" title="映像遅延補正モード" style="max-width: 145px; height: 28px; padding: 2px 6px; font-size: 11px; margin-right: 8px;">
+                            <option value="1" selected>低遅延 (推奨)</option>
+                            <option value="2">積極ドロップ (負荷時)</option>
+                            <option value="0">バッファ維持 (平滑)</option>
+                        </select>
                         <span class="text-muted text-xs">解像度/FPS:</span>
                         <span id="footerFpsInline" class="text-xs">0 FPS</span>
                     </div>
@@ -300,13 +308,19 @@
                         </div>
                     </div>
 
-                    <!-- Speed Control -->
+                    <!-- Speed & Corner Recovery Control -->
                     <div class="slider-panel mb-md">
                         <div class="slider-row">
                             <label>前進速度</label>
-                            <input type="range" id="ltSpeed" min="0" max="100" value="15">
-                            <span class="slider-value" id="ltSpeedVal">15</span>
+                            <input type="range" id="ltSpeed" min="0" max="100" value="12">
+                            <span class="slider-value" id="ltSpeedVal">12</span>
                         </div>
+                        <div class="slider-row" id="rowCornerRecovery">
+                            <label title="通常機体がコーナーを通り過ぎた際の後退速度">コーナー復帰後退</label>
+                            <input type="range" id="ltCornerBackSpeed" min="0" max="20" value="8">
+                            <span class="slider-value" id="ltCornerBackSpeedVal">8</span>
+                        </div>
+                        <p class="box-help text-xs text-muted" style="margin-top: 4px;">※通常機体が急カーブ・直角コーナーを通り過ぎた際、微後退しながら旋回探索してラインを再捕捉します。</p>
                     </div>
 
                     <!-- LineTrace Detection Status -->
@@ -457,10 +471,10 @@
 <div class="notification-area" id="notificationArea"></div>
 
 <!-- ===== Scripts ===== -->
-<script src="/static/js/app.js?v=20261008_disconnect_fix"></script>
-<script src="/static/js/controls.js?v=20261008_disconnect_fix"></script>
-<script src="/static/js/linetrace.js?v=20261008_disconnect_fix"></script>
-<script src="/static/js/video.js?v=20261008_disconnect_fix"></script>
+<script src="/static/js/app.js?v=20261008_latency_recovery_fix"></script>
+<script src="/static/js/controls.js?v=20261008_latency_recovery_fix"></script>
+<script src="/static/js/linetrace.js?v=20261008_latency_recovery_fix"></script>
+<script src="/static/js/video.js?v=20261008_latency_recovery_fix"></script>
 
 </body>
 </html>

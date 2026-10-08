@@ -16,6 +16,7 @@ const LineTraceUI = {
         'ltVMin': 'v_min',
         'ltVMax': 'v_max',
         'ltSpeed': 'forward_speed',
+        'ltCornerBackSpeed': 'corner_recovery_back_speed',
     },
 
     _sendTimeout: null,
@@ -46,6 +47,11 @@ const LineTraceUI = {
                 });
                 const modeName = mode === 'downward' ? '改造機体(ほぼ真下カメラ)' : '通常機体(前方微下向きカメラ)';
                 App.notify(`機体カメラモード変更: ${modeName}`, 'info');
+
+                const rowCorner = document.getElementById('rowCornerRecovery');
+                if (rowCorner) {
+                    rowCorner.style.display = mode === 'standard' ? 'flex' : 'none';
+                }
             });
         }
 
@@ -115,6 +121,10 @@ const LineTraceUI = {
         if (params.camera_mode !== undefined) {
             const cameraModeSelect = document.getElementById('ltCameraMode');
             if (cameraModeSelect) cameraModeSelect.value = params.camera_mode;
+            const rowCorner = document.getElementById('rowCornerRecovery');
+            if (rowCorner) {
+                rowCorner.style.display = params.camera_mode === 'standard' ? 'flex' : 'none';
+            }
         }
 
         // Toggle state

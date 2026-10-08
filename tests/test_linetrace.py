@@ -232,3 +232,48 @@ def test_line_lost_auto_recovery_search():
     assert res_reacquired.tracking_state == 'tracking'
     assert res_reacquired.forward_speed > 0
 
+
+def test_standard_mode_corner_overshoot_recovery():
+    """
+    通常機体 (前方微下向きカメラ) 向けコーナー通り過ぎ復帰テスト:
+    直前の数フレームでcorner_dirが'none'になってもコーナー記憶が失われず、
+    ロスト時に記憶方向への旋回 + 微後退(fb < 0)を実行して立ち往生を防ぐこと。
+    """
+    import time
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+    engine.active = True
+    engine.params.auto_recovery = True
+
+    # 1. 右直角コーナーを検出したフレーム
+    img_corner = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img_corner, (240, 360), (240, 240), (0, 0, 255), 14) # 縦線
+    cv2.line(img_corner, (240, 240), (400, 240), (0, 0, 255), 14) # 右折横線
+    res1 = engine.process_frame(img_corner)
+    assert res1.detected is True
+    assert res1.is_corner is True
+    assert res1.corner_dir == 'right'
+    assert engine._recent_corner_dir == 'right'
+
+    # 2. 通り過ぎる直前のフレーム: コーナー横線がフレーム外に出て直線だけが映り corner_dir='none' になる
+    img_straight = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img_straight, (240, 360), (240, 200), (0, 0, 255), 14)
+    res2 = engine.process_frame(img_straight)
+    assert res2.detected is True
+    # 重要な検証: 直前フレームでコーナー未検出('none')になっても、直近の有効コーナー履歴が消去されず残っていること！
+    assert res2.corner_dir == 'none'
+    assert engine._recent_corner_dir == 'right', "コーナー記憶が直前フレームで消去されてはいけません"
+
+    # 3. 通り過ぎてラインを完全にロスト (真っ黒フレーム)
+    blank = np.zeros((360, 480, 3), dtype=np.uint8)
+    engine._last_seen_time = time.time() - 0.8 # 0.8秒経過でPhase 2へ
+    res_search = engine.process_frame(blank)
+
+    assert res_search.detected is False
+    assert res_search.tracking_state == 'searching'
+    rc = engine.get_rc_values(res_search)
+    assert rc['yaw'] > 0, "記憶された右コーナーへ首を振っていること"
+    assert rc['fb'] < 0, "通常機体で通り過ぎたラインを引き戻すため微後退(fb < 0)していること"
+    assert "コーナー復帰中" in res_search.status_message
+

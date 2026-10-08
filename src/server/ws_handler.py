@@ -289,8 +289,23 @@ async def _handle_message(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             video = _app_state['video']
             video.stop()
             if tello.is_connected:
-                await asyncio.to_thread(tello.stream_off)
+                await asyncio.to_thread(tello.stream_off, False)
             return {'type': 'video_response', 'success': True}
+
+        elif msg_type == 'video_reset_buffer':
+            video = _app_state.get('video')
+            if video and video.streaming:
+                dropped = await asyncio.to_thread(video.flush_buffer)
+                return {'type': 'video_latency_response', 'success': True, 'dropped_frames': dropped, 'message': f'{dropped}フレーム破棄して最新映像に同期しました'}
+            return {'type': 'video_latency_response', 'success': False, 'message': '映像ストリーミングが開始されていません'}
+
+        elif msg_type == 'video_latency':
+            video = _app_state.get('video')
+            low_lat = msg.get('low_latency', True)
+            drain_rate = msg.get('drain_rate', 1)
+            if video:
+                video.set_latency_params(low_lat, drain_rate)
+            return {'type': 'video_latency_response', 'success': True, 'stats': video.get_stats() if video else {}}
 
         elif msg_type == 'linetrace_start':
             lt = _app_state['linetrace']

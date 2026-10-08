@@ -208,15 +208,29 @@ When accessing the web app from a touchscreen device over the local network:
   - **EMA Smoothing Filter**: Applies Exponential Moving Average to yaw/roll control values, rejecting high-frequency vision jitter for stable, steady flight.
   - **Smart Corner & Deviation Deceleration**: Automatically reduces forward speed during tight turns or significant offset to prevent centrifugal course-out.
 - **Auto-Recovery State Machine (Line Lost)**:
-  - **Phase 1 (0.0s - 0.5s) Inertia Stabilization**: Instantly cuts forward speed to 0 and commands neutral hover to cancel forward momentum.
-  - **Phase 2 (0.5s - 2.5s) Last-Seen Direction Scan**: Autonomously turns the drone's head toward the side where the line was last visible.
-  - **Phase 3 (2.5s - 4.5s) Reverse Direction Scan**: Scans in the opposite direction if still unacquired.
-  - **Phase 4 (>4.5s) Safe Hover Standby**: Holds a stationary hover if the line remains undetected.
-  - **Autonomous Resumption**: Once the line reappears in the camera frame, tracking seamlessly resumes **without manual operator intervention** (forward speed strictly remains 0 during scanning to prevent runaway collisions).
+  - **Corner Memory**: For standard drones, if a 90° corner or sharp turn is overshot and disappears from the bottom/edge of the frame in the last few frames, the system retains the detected turn direction (right or left) over several seconds to prevent scanning in the wrong direction.
+  - **Phase 1 (0.0s - 0.4s) Inertia Stabilization**: Instantly cuts forward speed to 0 and commands neutral hover to cancel forward momentum.
+  - **Phase 2 (0.4s - 3.0s) Direction Scan & Overshoot Recovery**:
+    - **Standard Drone (Forward tilt)**: If a corner was recently detected, executes a gentle reverse flight (`fb = -8`, configurable 3-20 via UI) while yawing toward the remembered direction to pull the overshot line back into the camera FOV. If a straight line was lost, scans yaw in-place.
+    - **Modified Drone (Downward-facing)**: Scans using a combination of lateral roll translation and yaw rotation.
+  - **Phase 3 (3.0s - 5.0s) Reverse Direction Scan**: Scans in the opposite direction if still unacquired.
+  - **Phase 4 (>5.0s) Safe Hover Standby**: Holds a stationary hover if the line remains undetected.
+  - **Autonomous Resumption**: Once the line reappears in the camera frame, tracking seamlessly resumes **without manual operator intervention** (forward speed strictly remains <= 0 during scanning to prevent runaway collisions).
 
 ---
 
-### 5. Screenshot Capture (PNG Download)
+### 5. Video Streaming & Latency Compensation
+
+- **Decoupled Capture Architecture**: Video frame capture and compute-heavy processing (LSD, QR detection) run in independent worker threads, completely preventing buffer bloat in OpenCV/FFmpeg.
+- **Buffer Flush ("Reset Latency" Button)**: Instantly flushes accumulated network frames with one click without needing to disconnect or restart the video stream.
+- **Latency Optimization Modes**:
+  - `Normal (30fps)`: Prioritizes smooth playback.
+  - `Low Latency (Latest frame)`: Aggressively drops delayed frames to maintain minimal latency.
+  - `Ultra Low (Drop-on-read)`: Discards stale packets on every read loop for the fastest possible response.
+
+---
+
+### 6. Screenshot Capture (PNG Download)
 
 - Click the camera button below the video stream to save the current frame.
 - Output file format: `TELLO_YYYY-MM-DD-HH-mm-ss.png`
@@ -224,7 +238,7 @@ When accessing the web app from a touchscreen device over the local network:
 
 ---
 
-### 6. Flight Logging (Timeline CSV)
+### 7. Flight Logging (Timeline CSV)
 
 - Every flight session is recorded into a timestamped CSV file in the `logs/` directory.
 - Click **Flight Log CSV** in the Flight Control panel to download the latest session (`logs/TELLO_YYYY-MM-DD-HH-mm-ss.csv`).
@@ -232,7 +246,7 @@ When accessing the web app from a touchscreen device over the local network:
 
 ---
 
-### 7. QR Code Detection
+### 8. QR Code Detection
 
 - Scans the camera video stream for QR codes, displaying decoded content and URLs.
 - Supports storing Student ID / Username and exporting records as CSV.
@@ -295,6 +309,8 @@ Please note the following technical constraints enforced by modern mobile browse
 | `POST` | `/api/rc` | Set RC stick values `{lr, fb, ud, yaw}` |
 | `GET` | `/video_stream` | Standard camera video stream (MJPEG) |
 | `GET` | `/linetrace_stream` | Video stream with LSD overlay (MJPEG) |
+| `POST` | `/api/video/reset_buffer` | Flush video buffer immediately (Latency reset) |
+| `POST` | `/api/video/latency` | Set latency optimization mode `{mode: "normal"\|"low_latency"\|"ultra_low"}` |
 | `GET` | `/api/screenshot` | Download latest video frame as PNG |
 | `GET` | `/api/logs/latest` | Download latest flight session CSV log |
 | `POST` | `/api/linetrace/start` | Start LineTrace autonomous control |
@@ -305,8 +321,8 @@ Please note the following technical constraints enforced by modern mobile browse
 
 | URI | Purpose |
 |---|---|
-| `ws://<host>:8000/ws/control` | Bidirectional control (keyboard inputs, single commands, QR requests) |
-| `ws://<host>:8000/ws/telemetry` | Telemetry telemetry broadcast (1 Hz status update) |
+| `ws://<host>:8000/ws/control` | Bidirectional control (keyboard inputs, single commands, QR requests, video latency reset) |
+| `ws://<host>:8000/ws/telemetry` | Telemetry broadcast (1 Hz status update, battery, altitude, temperature, LSD status) |
 
 ---
 

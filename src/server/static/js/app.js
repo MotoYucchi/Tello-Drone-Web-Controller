@@ -308,6 +308,10 @@ const App = {
             }
         } else if (type === 'qr_response') {
             QRManager.handleResult(msg);
+        } else if (type === 'video_latency_response') {
+            if (msg.message) {
+                this.notify(msg.message, msg.success ? 'success' : 'warning');
+            }
         } else if (type === 'error') {
             this.notify(msg.message || 'エラーが発生しました', 'error');
         }

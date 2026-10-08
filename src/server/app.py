@@ -214,6 +214,10 @@ class VideoQualityRequest(BaseModel):
     height: int = Field(default=480, ge=120, le=1080)
     quality: int = Field(default=80, ge=10, le=100)
 
+class VideoLatencyRequest(BaseModel):
+    low_latency: bool = Field(default=True, description="低遅延優先モード")
+    drain_rate: int = Field(default=1, ge=0, le=4, description="フレーム破棄レート (0-4)")
+
 class LineTraceParamsRequest(BaseModel):
     camera_mode: str = Field(default="standard", description="standard (通常機体) または downward (改造機体)")
     h_min: int = Field(default=0, ge=0, le=179)
@@ -226,6 +230,8 @@ class LineTraceParamsRequest(BaseModel):
     forward_speed: int = Field(default=15, ge=0, le=100)
     deadzone: float = Field(default=20.0, ge=0, le=200)
     yaw_limit: float = Field(default=60.0, ge=0, le=100)
+    corner_recovery_back_speed: int = Field(default=8, ge=0, le=30)
+    corner_memory_sec: float = Field(default=3.0, ge=0.5, le=10.0)
 
 
 # =========================================================================
@@ -475,6 +481,25 @@ async def get_screenshot():
             "Content-Disposition": f'attachment; filename="{filename}"'
         }
     )
+
+
+@app.post("/api/video/reset_buffer")
+async def reset_video_buffer():
+    """映像バッファを即時フラッシュして遅延をリセット"""
+    video: TelloVideoReceiver = app_state['video']
+    if not video or not video.streaming:
+        return {"success": False, "message": "映像ストリーミングが開始されていません"}
+    dropped = await asyncio.to_thread(video.flush_buffer)
+    return {"success": True, "dropped_frames": dropped, "message": f"{dropped}フレーム破棄して最新映像に同期しました"}
+
+
+@app.post("/api/video/latency")
+async def set_video_latency(req: VideoLatencyRequest):
+    """映像遅延パラメータ設定"""
+    video: TelloVideoReceiver = app_state['video']
+    if video:
+        video.set_latency_params(req.low_latency, req.drain_rate)
+    return {"success": True, "stats": video.get_stats() if video else {}}
 
 
 @app.get("/video_stream")

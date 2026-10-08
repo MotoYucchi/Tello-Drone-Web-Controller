@@ -119,6 +119,37 @@ const VideoManager = {
             App.notify(`静止画を保存しました (${filename})`, 'success');
         }, 'image/png');
     },
+
+    async resetBuffer() {
+        if (!App.videoStreaming) {
+            App.notify('映像ストリーミングが開始されていません', 'info');
+            return;
+        }
+        try {
+            App.wsSend({ type: 'video_reset_buffer' });
+            const res = await App.api('POST', '/video/reset_buffer');
+            if (res && res.success) {
+                App.notify(res.message || '遅延をリセットし、最新映像に同期しました', 'success', 2000);
+                if (this.streamImg) {
+                    const baseSrc = this.streamImg.src.split('?')[0];
+                    this.streamImg.src = `${baseSrc}?${Date.now()}`;
+                }
+            } else {
+                App.notify(res.message || '遅延リセットに失敗しました', 'warning');
+            }
+        } catch (e) {
+            console.error('遅延リセットエラー:', e);
+            App.notify('遅延リセットエラー', 'error');
+        }
+    },
+
+    async setLatencyMode(val) {
+        const drainRate = parseInt(val, 10);
+        const lowLat = drainRate > 0;
+        App.wsSend({ type: 'video_latency', low_latency: lowLat, drain_rate: drainRate });
+        await App.api('POST', '/video/latency', { low_latency: lowLat, drain_rate: drainRate });
+        App.notify(`遅延モード変更: ${drainRate === 1 ? '低遅延(推奨)' : (drainRate === 2 ? '積極ドロップ' : 'バッファ維持')}`, 'info', 1500);
+    },
 };
 
 // Init
@@ -129,6 +160,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (toggle) {
         toggle.addEventListener('change', (e) => {
             VideoManager.toggleMode(e.target.checked);
+        });
+    }
+
+    const btnReset = document.getElementById('btnResetVideoBuffer');
+    if (btnReset) {
+        btnReset.addEventListener('click', () => {
+            VideoManager.resetBuffer();
+        });
+    }
+
+    const latencySelect = document.getElementById('videoLatencyMode');
+    if (latencySelect) {
+        latencySelect.addEventListener('change', (e) => {
+            VideoManager.setLatencyMode(e.target.value);
         });
     }
 });
