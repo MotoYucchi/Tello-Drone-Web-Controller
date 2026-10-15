@@ -17,9 +17,11 @@ A web-based DJI Tello drone controller with explicit WiFi interface binding, Lin
   - [2. Flight Controls (Buttons & Keyboard)](#2-flight-controls-buttons--keyboard)
   - [3. Smartphone & Tablet Controls](#3-smartphone--tablet-controls)
   - [4. LineTrace (LSD Auto-Follow)](#4-linetrace-lsd-auto-follow)
-  - [5. Screenshot Capture (PNG Download)](#5-screenshot-capture-png-download)
-  - [6. Flight Logging (Timeline CSV)](#6-flight-logging-timeline-csv)
-  - [7. QR Code Detection](#7-qr-code-detection)
+  - [5. Video Streaming & Latency Compensation](#5-video-streaming--latency-compensation)
+  - [6. Screenshot Capture (PNG Download)](#6-screenshot-capture-png-download)
+  - [7. Experimental Features (Square Course & 10Hz Logging)](#7-experimental-features-square-course--10hz-logging)
+  - [8. Flight Logging (Timeline CSV)](#8-flight-logging-timeline-csv)
+  - [9. QR Code Detection](#9-qr-code-detection)
 - [Smartphone Usage Notes (HTTP Security Policy Constraints)](#smartphone-usage-notes-http-security-policy-constraints)
 - [Network Architecture](#network-architecture)
 - [API Reference](#api-reference)
@@ -48,8 +50,8 @@ It addresses practical challenges such as packet routing on dual-network machine
    - **Modified Drone**: Downward-facing camera, controlled via lateral Roll translation and forward speed.
 3. **Late-2010s Dark UI & Responsive Layout**:
    Features a functional, eye-friendly dark gray interface (inspired by classic VS Code and GitHub Dark themes) without heavy blurs or distracting neon glow effects. Includes a virtual on-screen D-Pad for touchscreens.
-4. **Timeline CSV Logging & High-Quality Still Capture**:
-   Automatically records flight metrics (timestamp, battery, altitude, temperature, attitude Euler angles, velocities, RC stick values, and LineTrace status) at 1-second intervals. Full-resolution frames can be saved directly as PNG files.
+4. **Timeline CSV Logging & Still Capture**:
+   Automatically records flight metrics (timestamp, battery, altitude, temperature, attitude Euler angles, velocities, RC stick values, and LineTrace status) at 1-second intervals (or 10Hz when experimental features are enabled). The latest video frame can be saved directly as a PNG file.
 
 ---
 
@@ -59,17 +61,20 @@ It addresses practical challenges such as packet routing on dual-network machine
 |---|---|---|
 | **Networking** | Interface Selection | Auto-detection or explicit local IP socket binding |
 | | Telemetry Stream | Real-time battery, altitude, temperature, and flight time |
-| | Connection Management | Clean socket closure and seamless reconnection without restarting |
+| | Connection Management | Clean socket closure and reconnection handling without restarting |
 | **Flight Control** | Takeoff / Land / Emergency | GUI buttons, keyboard shortcuts, or virtual touch buttons |
 | | Manual Piloting | WASD (Pitch/Roll), R/F (Throttle), Q/E (Yaw) |
 | | Touch D-Pad | Virtual controller on touchscreen devices (hold to move, release to hover) |
 | **Video & Media** | Low-latency MJPEG | Live video stream with quality presets (low/medium/high) |
-| | PNG Screenshot | Direct lossless capture (`TELLO_YYYY-MM-DD-HH-mm-ss.png`) |
+| | PNG Screenshot | Download latest video frame (`TELLO_YYYY-MM-DD-HH-mm-ss.png`) |
 | | LineTrace HUD Overlay | Real-time visualization of detected segments and heading vectors |
-| **Line Tracking** | LSD Line Detection | Robust line segment extraction via OpenCV LSD |
+| | Latency Reset & Mode | Manual buffer flush and latency mode configuration |
+| **Line Tracking** | LSD Line Detection | Line segment extraction via OpenCV LSD |
 | | Dual Camera Modes | Standard (Yaw-based) vs. Downward-facing (Roll-based) control |
 | | Failsafe Actions | Instant hovering on line loss, speed reduction on 90-degree corners |
-| **Data & Tools** | Flight Logging | CSV timeline export per flight session |
+| | Corner Memory & Recovery | Turn direction retention (up to 20s), backtrack reverse (speed up to 48), 360° auto-rotate search |
+| | Square Course Lap Tracking (Experimental) | Automatic lap count and lap timer based on 4 detected corners with HUD overlay |
+| **Data & Tools** | Flight Logging | CSV timeline export per flight session (1Hz standard / 10Hz experimental) |
 | | QR Code Scanner | Text/URL recognition from video stream with CSV export |
 
 ---
@@ -141,7 +146,7 @@ Open `http://localhost:8000` in your browser (or `http://<PC_IP>:8000` from mobi
 # Start server
 uv run python -m src
 
-# Run test suite (25 automated test cases)
+# Run test suite (37 automated test cases)
 uv run pytest -v
 ```
 
@@ -203,32 +208,32 @@ When accessing the web app from a touchscreen device over the local network:
 
 #### Stabilization and Safety Features (Failsafe & Auto-Recovery)
 - **Anti-Wobble Stabilization**:
-  - **Smooth Deadzone Ramp**: Eliminates sudden torque jumps at deadband boundaries, ensuring gentle transitions.
-  - **PD Damping Brake**: Detects approach velocity toward center and applies reverse damping torque ($\frac{d(dx)}{dt}$) to arrest rotational inertia and eliminate overshoot oscillation.
-  - **EMA Smoothing Filter**: Applies Exponential Moving Average to yaw/roll control values, rejecting high-frequency vision jitter for stable, steady flight.
-  - **Smart Corner & Deviation Deceleration**: Automatically reduces forward speed during tight turns or significant offset to prevent centrifugal course-out.
+  - **Smooth Deadzone Ramp**: Eliminates abrupt torque jumps at deadband boundaries, ensuring gentle transitions.
+  - **PD Damping Brake**: Detects approach velocity toward center and applies reverse damping torque ($\frac{d(dx)}{dt}$) to counter rotational inertia and suppress overshoot oscillation.
+  - **EMA Smoothing Filter**: Applies Exponential Moving Average to yaw/roll control values, attenuating high-frequency vision noise for steady flight.
+  - **Turn & Deviation Deceleration**: Automatically reduces forward speed during tight turns or significant offset to prevent running off the track.
 - **Auto-Recovery State Machine (Line Lost)**:
   - **Corner Memory**: For standard drones, if a 90° corner or sharp turn is overshot, the system retains the detected turn direction (right or left) for a configurable duration (default 10s, adjustable 1-20s via UI slider) to prevent scanning in the wrong direction. During turns, forward speed is kept low until re-aligned to enhance corner curving capability.
-  - **Phase 1 (0.0s - 0.4s) Inertia Stabilization**: Instantly cuts forward speed to 0 and commands neutral hover to cancel forward momentum.
+  - **Phase 1 (0.0s - 0.4s) Inertia Stabilization**: Sets forward speed to 0 and commands neutral hover to cancel forward momentum.
   - **Phase 2 (0.4s - 3.5s) Backtrack Recovery & Scan**:
     - **Standard Drone (Forward tilt)**: If a corner was recently detected, executes reverse flight (speed up to 48, configurable via UI) while yawing toward the remembered direction to pull the overshot line back into the camera FOV. With the "Backtrack on Lost" option enabled, reverse flight is also executed on straight/curved line loss to retrace back to the last known position.
     - **Modified Drone (Downward-facing)**: Scans using lateral roll translation and yaw rotation.
   - **Phase 3 (3.5s - 5.5s) Continuous Search**: Continues searching in the corner direction or reverses scan direction.
   - **Phase 4 (>5.5s) Safe Hover Standby / Auto-Rotate**:
     - **Auto-Rotate while Hovering (Option)**: When enabled, continues a gentle 360-degree yaw rotation while hovering to search for lines in all directions.
-    - **Default**: Safely maintains a stationary neutral hover in place.
-  - **Autonomous Resumption**: Once the line reappears in the camera frame, tracking seamlessly resumes **without manual operator intervention** (forward speed strictly remains <= 0 during recovery scanning to prevent collisions).
+    - **Default**: Maintains stationary neutral hover in place if the line is not found.
+  - **Autonomous Resumption**: Once the line reappears in the camera frame, tracking resumes automatically (forward speed strictly remains <= 0 during recovery scanning to prevent collisions).
 
 ---
 
 ### 5. Video Streaming & Latency Compensation
 
-- **Decoupled Capture Architecture**: Video frame capture and compute-heavy processing (LSD, QR detection) run in independent worker threads, completely preventing buffer bloat in OpenCV/FFmpeg.
-- **Buffer Flush ("Reset Latency" Button)**: Instantly flushes accumulated network frames with one click without needing to disconnect or restart the video stream.
+- **Decoupled Capture Architecture**: Video frame capture and compute-heavy processing (LSD, QR detection) run in separate worker threads, mitigating buffer bloat in OpenCV/FFmpeg.
+- **Buffer Flush ("Reset Latency" Button)**: Flushes accumulated network frames on demand without needing to restart the video stream.
 - **Latency Optimization Modes**:
   - `Normal (30fps)`: Prioritizes smooth playback.
-  - `Low Latency (Latest frame)`: Aggressively drops delayed frames to maintain minimal latency.
-  - `Ultra Low (Drop-on-read)`: Discards stale packets on every read loop for the fastest possible response.
+  - `Low Latency (Latest frame)`: Discards delayed frames to maintain lower latency.
+  - `Ultra Low (Drop-on-read)`: Drops stale packets on every read loop for minimal display latency.
 
 ---
 
@@ -236,19 +241,32 @@ When accessing the web app from a touchscreen device over the local network:
 
 - Click the camera button below the video stream to save the current frame.
 - Output file format: `TELLO_YYYY-MM-DD-HH-mm-ss.png`
-- Captured directly via backend API (`/api/screenshot`) with Canvas fallback.
+- Captured via backend API (`/api/screenshot`) with Canvas fallback.
 
 ---
 
-### 7. Flight Logging (Timeline CSV)
+### 7. Experimental Features (Square Course & 10Hz Logging)
 
-- Every flight session is recorded into a timestamped CSV file in the `logs/` directory.
+Enable the **"🧪 Experimental Features"** toggle in the top header to unlock additional experimental capabilities:
+
+- **Square Course Lap Counting**:
+  - Selecting "Square Course (4 Corners)" in the LineTrace panel tracks the drone's progression around a 4-corner rectangular loop.
+  - The video HUD displays `[SQUARE] Lap: 0 (C:0/4) Time: 0.0s`, incrementing laps on every 4 detected turns.
+  - Reset lap counters and lap times at any time via the "Reset Laps" button (or `/api/linetrace/reset_laps`).
+- **High-Frequency Flight Logging (10Hz CSV)**:
+  - When experimental mode is active, flight telemetry is recorded at **10Hz (10 samples/sec)** instead of the standard 1Hz. This enables fine-grained tracking error (`lt_offset_dx`) and cornering dynamics analysis.
+
+---
+
+### 8. Flight Logging (Timeline CSV)
+
+- Every flight session is recorded into a timestamped CSV file in the `logs/` directory (1Hz standard / 10Hz when experimental features are enabled).
 - Click **Flight Log CSV** in the Flight Control panel to download the latest session (`logs/TELLO_YYYY-MM-DD-HH-mm-ss.csv`).
-- **Logged Columns**: Timestamp, flight time, battery, altitude, temperature, Euler angles (pitch, roll, yaw), velocities (vx, vy, vz), transmitted RC stick values (lr, fb, ud, yaw), flight mode, and LineTrace detection status.
+- **Logged Columns**: Timestamp, flight time, battery, altitude, temperature, Euler angles (pitch, roll, yaw), velocities (vx, vy, vz), transmitted RC stick values (lr, fb, ud, yaw), flight mode, LineTrace detection status, course type and lap metrics (when in square course mode), and control parameters.
 
 ---
 
-### 8. QR Code Detection
+### 9. QR Code Detection
 
 - Scans the camera video stream for QR codes, displaying decoded content and URLs.
 - Supports storing Student ID / Username and exporting records as CSV.
@@ -300,7 +318,7 @@ Please note the following technical constraints enforced by modern mobile browse
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | Server health status |
+| `GET` | `/health`, `/api/health` | Server health status |
 | `GET` | `/api/status` | Tello connection and state |
 | `POST` | `/api/connect` | Initiate UDP socket connection `{local_ip}` |
 | `POST` | `/api/disconnect` | Safe disconnect and cleanup |
@@ -309,15 +327,33 @@ Please note the following technical constraints enforced by modern mobile browse
 | `POST` | `/api/land` | Transmit land command |
 | `POST` | `/api/emergency` | Immediate motor cut-off |
 | `POST` | `/api/rc` | Set RC stick values `{lr, fb, ud, yaw}` |
+| `POST` | `/api/move` | Directional movement command `{direction, distance}` |
+| `POST` | `/api/rotate` | Directional rotation command `{direction, degrees}` |
+| `POST` | `/api/video/start` | Request video stream start |
+| `POST` | `/api/video/stop` | Request video stream stop |
+| `POST` | `/api/video/quality` | Set video FPS and bitrate `{fps, bitrate}` |
+| `POST` | `/api/video/reset_buffer` | Flush video buffer (latency reset) |
+| `POST` | `/api/video/latency` | Set latency optimization mode `{mode: "normal"\|"low_latency"\|"ultra_low"}` |
 | `GET` | `/video_stream` | Standard camera video stream (MJPEG) |
 | `GET` | `/linetrace_stream` | Video stream with LSD overlay (MJPEG) |
-| `POST` | `/api/video/reset_buffer` | Flush video buffer immediately (Latency reset) |
-| `POST` | `/api/video/latency` | Set latency optimization mode `{mode: "normal"\|"low_latency"\|"ultra_low"}` |
 | `GET` | `/api/screenshot` | Download latest video frame as PNG |
+| `GET` | `/api/logs` | Enumerate available flight session CSV logs |
 | `GET` | `/api/logs/latest` | Download latest flight session CSV log |
+| `GET` | `/api/logs/{filename}` | Download specified flight session CSV log |
 | `POST` | `/api/linetrace/start` | Start LineTrace autonomous control |
 | `POST` | `/api/linetrace/stop` | Stop LineTrace autonomous control |
 | `POST` | `/api/linetrace/params` | Update LineTrace filter and control parameters |
+| `POST` | `/api/linetrace/preset/{name}` | Apply color preset (red, blue, yellow, black) |
+| `GET` | `/api/linetrace/presets` | Get available color presets |
+| `GET` | `/api/linetrace/status` | Retrieve LineTrace status and metrics |
+| `POST` | `/api/linetrace/course` | Set course type `{course_type: "square"\|"other"}` |
+| `POST` | `/api/linetrace/reset_laps` | Reset square course lap counter and lap timer |
+| `GET` | `/api/experimental/status` | Get experimental features toggle status |
+| `POST` | `/api/experimental/enable` | Enable experimental features |
+| `POST` | `/api/experimental/disable` | Disable experimental features |
+| `POST` | `/api/experimental/toggle` | Toggle experimental features |
+| `POST` | `/api/qr/params` | Configure QR scanner `{user_name, student_id}` |
+| `GET` | `/api/qr/export` | Export scanned QR records as CSV |
 
 ### WebSocket Channels
 

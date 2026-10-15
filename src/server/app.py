@@ -805,6 +805,7 @@ async def clear_qr_links():
 # =========================================================================
 
 @app.get("/health")
+@app.get("/api/health")
 async def health():
     tello: TelloUDPController = app_state.get('tello')
     return {

@@ -28,7 +28,10 @@
 ### 2.3 システム起動
 - [ ] コマンドプロンプトまたはPowerShellでサーバーを起動:
   ```bash
-  python run_server.py
+  # Windowsバッチ
+  start.bat
+  # または uv コマンド経由
+  uv run python -m src
   ```
 - [ ] ブラウザで `http://localhost:8000` にアクセス
 - [ ] TelloのWi-Fiに接続し、Web画面で「接続」をクリック
