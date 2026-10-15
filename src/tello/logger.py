@@ -50,6 +50,21 @@ class FlightLogger:
         "course_type",
         "lap_count",
         "lap_time_sec",
+        # 各種制御・アルゴリズムパラメータ設定値
+        "param_camera_mode",
+        "param_h_min",
+        "param_h_max",
+        "param_s_min",
+        "param_s_max",
+        "param_v_min",
+        "param_v_max",
+        "param_forward_speed",
+        "param_deadzone",
+        "param_yaw_limit",
+        "param_corner_back_speed",
+        "param_corner_memory_sec",
+        "param_lost_backtrack",
+        "param_lost_auto_rotate",
         "event_note",
     ]
 
@@ -67,12 +82,14 @@ class FlightLogger:
         self._latest_rc: Dict[str, int] = {'lr': 0, 'fb': 0, 'ud': 0, 'yaw': 0}
         self._control_mode: str = "idle"  # idle, manual, linetrace
         self._latest_linetrace: Dict[str, Any] = {}
+        self._latest_params: Dict[str, Any] = {}
         self._event_queue: List[str] = []
 
         # コース・周回記録用
         self._course_type: str = "square"  # "square" または "other"
         self._lap_count: int = 0
         self._lap_time_sec: float = 0.0
+
 
 
         # ログディレクトリ作成
@@ -145,6 +162,11 @@ class FlightLogger:
         with self._lock:
             self._latest_linetrace = result.copy()
 
+    def update_linetrace_params(self, params: Dict[str, Any]) -> None:
+        """ライントレースパラメータ設定値の更新"""
+        with self._lock:
+            self._latest_params = params.copy()
+
     def update_course_info(self, course_type: str, lap_count: int, lap_time_sec: float) -> None:
         """コース情報・周回数・ラップタイムの更新"""
         with self._lock:
@@ -185,6 +207,7 @@ class FlightLogger:
             tel = self._latest_telemetry
             rc = self._latest_rc
             lt = self._latest_linetrace
+            lp = self._latest_params
             event = "; ".join(self._event_queue)
             self._event_queue.clear()
 
@@ -218,8 +241,24 @@ class FlightLogger:
                 self._course_type,
                 self._lap_count,
                 self._lap_time_sec,
+                # パラメータ設定値
+                lp.get('camera_mode', 'standard'),
+                lp.get('h_min', 0),
+                lp.get('h_max', 179),
+                lp.get('s_min', 0),
+                lp.get('s_max', 255),
+                lp.get('v_min', 0),
+                lp.get('v_max', 255),
+                lp.get('forward_speed', 12),
+                lp.get('deadzone', 15.0),
+                lp.get('yaw_limit', 35.0),
+                lp.get('corner_recovery_back_speed', 10),
+                lp.get('corner_memory_sec', 10.0),
+                lp.get('lost_backtrack', False),
+                lp.get('lost_auto_rotate', False),
                 event,
             ]
+
 
 
         with open(self.current_file, mode='a', newline='', encoding='utf-8-sig') as f:

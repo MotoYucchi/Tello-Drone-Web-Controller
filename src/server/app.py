@@ -118,6 +118,8 @@ async def lifespan(app: FastAPI):
             if fl:
                 fl.update_linetrace(lt.get_last_result_info())
                 fl.update_course_info(result.course_type, result.lap_count, result.last_lap_sec)
+                fl.update_linetrace_params(lt.get_params())
+
 
             if lt.active:
                 # LineTraceEngine が決定したRC制御値 (追従・ダンピング・自動復帰サーチ) を適用
