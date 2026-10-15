@@ -47,11 +47,15 @@ class FlightLogger:
         "lt_offset_dx",
         "lt_angle_deg",
         "lt_is_corner",
+        "course_type",
+        "lap_count",
+        "lap_time_sec",
         "event_note",
     ]
 
-    def __init__(self, log_dir: str = "logs"):
+    def __init__(self, log_dir: str = "logs", interval_sec: float = 0.1):
         self.log_dir = log_dir
+        self.interval_sec = interval_sec  # 10Hz高頻度ログ (デフォルト0.1秒)
         self.is_logging = False
         self.current_file: Optional[str] = None
         self.start_time: float = 0.0
@@ -64,6 +68,12 @@ class FlightLogger:
         self._control_mode: str = "idle"  # idle, manual, linetrace
         self._latest_linetrace: Dict[str, Any] = {}
         self._event_queue: List[str] = []
+
+        # コース・周回記録用
+        self._course_type: str = "square"  # "square" または "other"
+        self._lap_count: int = 0
+        self._lap_time_sec: float = 0.0
+
 
         # ログディレクトリ作成
         os.makedirs(self.log_dir, exist_ok=True)
@@ -135,15 +145,28 @@ class FlightLogger:
         with self._lock:
             self._latest_linetrace = result.copy()
 
+    def update_course_info(self, course_type: str, lap_count: int, lap_time_sec: float) -> None:
+        """コース情報・周回数・ラップタイムの更新"""
+        with self._lock:
+            self._course_type = course_type
+            self._lap_count = lap_count
+            self._lap_time_sec = round(lap_time_sec, 2)
+
+    def set_interval(self, interval_sec: float) -> None:
+        """ログ記録間隔の動的変更 (例: 0.1s = 10Hz, 1.0s = 1Hz)"""
+        with self._lock:
+            self.interval_sec = max(0.02, min(5.0, float(interval_sec)))
+            logger.info(f"フライトログ記録間隔を変更: {self.interval_sec}秒")
+
     def log_event(self, event_text: str) -> None:
         """イベント（離陸、着陸、QRスキャンなど）の記録"""
         with self._lock:
             self._event_queue.append(event_text)
 
     def _log_loop(self) -> None:
-        """定期記録ループ (約1秒周期)"""
+        """定期記録ループ (デフォルト0.1秒周期 = 10Hz)"""
         while self.is_logging and self.current_file:
-            time.sleep(1.0)
+            time.sleep(self.interval_sec)
             if not self.is_logging or not self.current_file:
                 break
             try:
@@ -192,8 +215,12 @@ class FlightLogger:
                 lt.get('offset_dx', 0.0),
                 lt.get('angle_deg', 0.0),
                 lt.get('is_corner', False),
+                self._course_type,
+                self._lap_count,
+                self._lap_time_sec,
                 event,
             ]
+
 
         with open(self.current_file, mode='a', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)

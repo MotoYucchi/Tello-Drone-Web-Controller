@@ -23,6 +23,53 @@ const LineTraceUI = {
     _sendTimeout: null,
 
     init() {
+        // Toggle Experimental Features
+        const toggleExp = document.getElementById('toggleExperimental');
+
+        if (toggleExp) {
+            toggleExp.addEventListener('change', async (e) => {
+                const endpoint = e.target.checked ? '/api/experimental/enable' : '/api/experimental/disable';
+                try {
+                    const res = await App.api('POST', endpoint.replace('/api', ''));
+                    this.setExperimentalState(e.target.checked);
+                    if (e.target.checked) {
+                        App.notify('試験的機能を有効化しました (10Hz高頻度ログ・周回記録)', 'success');
+                    } else {
+                        App.notify('試験的機能を無効化しクリーンリセットしました', 'info');
+                    }
+                } catch (err) {
+                    console.error('試験的機能切替エラー:', err);
+                }
+            });
+        }
+
+        // Course Type Selection
+        const courseSelect = document.getElementById('ltCourseType');
+        if (courseSelect) {
+            courseSelect.addEventListener('change', async (e) => {
+                try {
+                    await App.api('POST', '/linetrace/course', { course_type: e.target.value });
+                    const label = e.target.value === 'square' ? '四角コース' : 'その他コース';
+                    App.notify(`コース設定変更: ${label} (周回リセット)`, 'info');
+                } catch (err) {
+                    console.error('コース設定エラー:', err);
+                }
+            });
+        }
+
+        // Reset Laps Button
+        const btnResetLaps = document.getElementById('btnResetLaps');
+        if (btnResetLaps) {
+            btnResetLaps.addEventListener('click', async () => {
+                try {
+                    await App.api('POST', '/linetrace/reset_laps');
+                    App.notify('周回数カウンターをリセットしました', 'info');
+                } catch (err) {
+                    console.error('周回リセットエラー:', err);
+                }
+            });
+        }
+
         // Toggle LineTrace
         const toggle = document.getElementById('toggleLineTrace');
         if (toggle) {
@@ -59,6 +106,7 @@ const LineTraceUI = {
                 }
             });
         }
+
 
         // Checkboxes
         const chkBacktrack = document.getElementById('ltLostBacktrack');
@@ -200,8 +248,60 @@ const LineTraceUI = {
             el.textContent = '未検出';
             el.style.color = 'var(--text-muted)';
         }
+
+        // 周回数＆ラップタイム表示の更新
+        const elLap = document.getElementById('ltLapCountVal');
+        if (elLap && result.lap_count !== undefined) {
+            elLap.innerHTML = `${result.lap_count}<span style="font-size:11px;">周</span>`;
+        }
+
+        const elCorner = document.getElementById('ltCornerProgressVal');
+        if (elCorner && result.corner_pass_count !== undefined) {
+            elCorner.textContent = `${result.corner_pass_count}/4`;
+        }
+
+        const elCurrLap = document.getElementById('ltCurrentLapVal');
+        if (elCurrLap && result.current_lap_sec !== undefined) {
+            elCurrLap.innerHTML = `${result.current_lap_sec.toFixed(1)}<span style="font-size:11px;">s</span>`;
+        }
+
+        const elLastLap = document.getElementById('ltLastLapVal');
+        if (elLastLap) {
+            if (result.last_lap_sec && result.last_lap_sec > 0) {
+                elLastLap.innerHTML = `${result.last_lap_sec.toFixed(1)}<span style="font-size:11px;">s</span>`;
+            } else {
+                elLastLap.innerHTML = `--<span style="font-size:11px;">s</span>`;
+            }
+        }
+
+        // コース種別のUI反映
+        if (result.course_type !== undefined) {
+            const courseSelect = document.getElementById('ltCourseType');
+            if (courseSelect && courseSelect.value !== result.course_type) {
+                courseSelect.value = result.course_type;
+            }
+        }
+    },
+
+    /**
+     * 試験的機能の表示状態を同期
+     */
+    setExperimentalState(enabled) {
+        const toggleExp = document.getElementById('toggleExperimental');
+        if (toggleExp) toggleExp.checked = !!enabled;
+
+        const panel = document.getElementById('panel-linetrace');
+        if (panel) {
+            panel.style.display = enabled ? 'block' : 'none';
+        }
+
+        const mobileTab = document.querySelector('.mobile-tab-btn[data-target="panel-linetrace"]');
+        if (mobileTab) {
+            mobileTab.style.display = enabled ? 'inline-flex' : 'none';
+        }
     }
 };
+
 
 // Init
 document.addEventListener('DOMContentLoaded', () => {

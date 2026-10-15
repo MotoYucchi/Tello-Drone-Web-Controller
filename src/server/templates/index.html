@@ -19,6 +19,13 @@
             <span class="logo-title">Tello Drone Controller</span>
         </div>
         <div class="header-right">
+            <!-- Experimental Features Toggle -->
+            <label class="toggle-control text-xs" style="margin-right: 6px;" title="ライントレース・四角コース周回記録・10Hz高頻度ログを有効化">
+                <input type="checkbox" id="toggleExperimental">
+                <span class="toggle-slider"></span>
+                <span class="toggle-label"><i class="fas fa-flask"></i> 試験的機能</span>
+            </label>
+
             <!-- Non-secure / HTTP Environment Notice Badge -->
             <span id="securityNotice" class="badge badge-default" title="PCホストによるHTTP環境です。">ローカル接続</span>
             
@@ -32,6 +39,7 @@
                 <i class="fas fa-plug"></i> <span>接続</span>
             </button>
         </div>
+
     </div>
 </header>
 
@@ -229,10 +237,11 @@
         <!-- ===== Right / Secondary Column: Controls, LineTrace, QR, Network ===== -->
         <div class="secondary-column">
 
-            <!-- LineTrace LSD Panel -->
-            <section class="card tab-panel tab-active" id="panel-linetrace">
+            <!-- LineTrace LSD Panel (試験的機能が有効な場合のみ表示) -->
+            <section class="card tab-panel" id="panel-linetrace" style="display: none;">
                 <div class="card-header">
                     <span class="card-title"><i class="fas fa-route"></i> LineTrace (LSD)</span>
+                    <span class="badge badge-warning text-xs" style="margin-left: 8px;">試験的</span>
                     <label class="toggle-control" style="margin-left:auto;">
                         <input type="checkbox" id="toggleLineTrace">
                         <span class="toggle-slider"></span>
@@ -240,8 +249,44 @@
                     </label>
                 </div>
                 <div class="card-body">
+                    <!-- Course & Lap Counter (Square Course Tracker) -->
+                    <div class="control-box mb-md" style="background: rgba(2, 132, 199, 0.08); border: 1.5px solid #0284c7; border-radius: 6px; padding: 10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+                            <span class="box-title" style="font-weight:bold; color:#0284c7; margin:0;"><i class="fas fa-flag-checkered"></i> コース ＆ 周回数記録</span>
+                            <span class="badge badge-success text-xs" id="ltLogRateBadge" title="ログ収集周期">10Hz高頻度ログ中</span>
+                        </div>
+                        <div style="display:flex; gap: 8px; align-items:center; margin-bottom: 8px;">
+                            <select id="ltCourseType" class="form-select" style="flex:1;">
+                                <option value="square" selected>四角コース (4直角コーナー走破で1周)</option>
+                                <option value="other">その他・未定義コース</option>
+                            </select>
+                            <button class="btn btn-default btn-sm" id="btnResetLaps" title="周回数・ラップタイムをゼロリセット">
+                                <i class="fas fa-redo"></i> リセット
+                            </button>
+                        </div>
+                        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 6px; text-align:center;">
+                            <div style="background:#fff; border-radius:4px; padding:4px;">
+                                <div style="font-size:10px; color:#64748b;">周回数</div>
+                                <div id="ltLapCountVal" style="font-size:18px; font-weight:bold; color:#0284c7;">0<span style="font-size:11px;">周</span></div>
+                            </div>
+                            <div style="background:#fff; border-radius:4px; padding:4px;">
+                                <div style="font-size:10px; color:#64748b;">コーナー</div>
+                                <div id="ltCornerProgressVal" style="font-size:18px; font-weight:bold; color:#0f172a;">0/4</div>
+                            </div>
+                            <div style="background:#fff; border-radius:4px; padding:4px;">
+                                <div style="font-size:10px; color:#64748b;">現ラップ</div>
+                                <div id="ltCurrentLapVal" style="font-size:18px; font-weight:bold; color:#10b981;">0.0<span style="font-size:11px;">s</span></div>
+                            </div>
+                            <div style="background:#fff; border-radius:4px; padding:4px;">
+                                <div style="font-size:10px; color:#64748b;">前ラップ</div>
+                                <div id="ltLastLapVal" style="font-size:18px; font-weight:bold; color:#64748b;">--<span style="font-size:11px;">s</span></div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="control-box mb-md">
                         <div class="box-title">機体カメラタイプ</div>
+
                         <select id="ltCameraMode" class="form-select">
                             <option value="standard" selected>通常機体 (前方微下向きカメラ)</option>
                             <option value="downward">改造機体 (ほぼ真下カメラ)</option>

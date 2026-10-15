@@ -96,6 +96,9 @@ class LineTraceParams:
     process_width: int = 480
     process_height: int = 360
 
+    # コース種別: "square" (四角コース: 4コーナーで1周) または "other" (その他・未定義)
+    course_type: str = "square"
+
 
 @dataclass
 class LineTraceResult:
@@ -113,8 +116,15 @@ class LineTraceResult:
     segments_count: int = 0
     tracking_state: str = 'tracking'  # 'tracking', 'stabilizing', 'searching', 'lost', 'idle'
     status_message: str = ''
+    # コース・周回トラッキング
+    course_type: str = 'square'
+    lap_count: int = 0
+    corner_pass_count: int = 0
+    current_lap_sec: float = 0.0
+    last_lap_sec: float = 0.0
     # 処理済みデバッグ画像
     debug_frame: Optional[np.ndarray] = None
+
 
 
 class LineTraceEngine:
@@ -144,6 +154,25 @@ class LineTraceEngine:
         self._last_corner_time: float = 0.0
         self._recent_dx_history = collections.deque(maxlen=30)
         self._recent_angle_history = collections.deque(maxlen=30)
+
+        # コース・周回トラッキング (四角コース: 4つの直角コーナー通過で1周)
+        self.lap_count: int = 0
+        self.corner_pass_count: int = 0
+        self.lap_start_time: float = 0.0
+        self.current_lap_sec: float = 0.0
+        self.last_lap_sec: float = 0.0
+        self._last_corner_event_time: float = 0.0
+
+    def reset_lap_metrics(self) -> None:
+        """周回カウンターとラップタイムをリセット"""
+        self.lap_count = 0
+        self.corner_pass_count = 0
+        self.lap_start_time = 0.0
+        self.current_lap_sec = 0.0
+        self.last_lap_sec = 0.0
+        self._last_corner_event_time = 0.0
+        logger.info("周回トラッキングデータをリセットしました")
+
 
     def set_params(self, params_dict: Dict[str, Any]) -> None:
         """パラメータ一括設定"""
@@ -195,8 +224,14 @@ class LineTraceEngine:
             'corner_memory_sec': self.params.corner_memory_sec,
             'lost_auto_rotate': self.params.lost_auto_rotate,
             'lost_backtrack': self.params.lost_backtrack,
+            'course_type': getattr(self.params, 'course_type', 'square'),
+            'lap_count': self.lap_count,
+            'corner_pass_count': self.corner_pass_count,
+            'current_lap_sec': self.current_lap_sec,
+            'last_lap_sec': self.last_lap_sec,
             'active': self.active,
         }
+
 
     def process_frame(self, frame: np.ndarray) -> LineTraceResult:
         """
@@ -250,8 +285,30 @@ class LineTraceEngine:
                 elif (now - self._last_corner_time) > memory_sec:
                     self._recent_corner_dir = 'none'
 
+                # 周回トラッキング (四角コース: 4つの直角コーナー通過で1周)
+                if self.active:
+                    if self.lap_start_time == 0.0:
+                        self.lap_start_time = now
+
+                    is_corner_now = bool(info.get('is_corner', False))
+                    # コーナー検出かつ、前回のコーナーから2.5秒以上経過していれば新規コーナー通過と判定 (チャタリング防止)
+                    if is_corner_now and (now - self._last_corner_event_time) > 2.5:
+                        self._last_corner_event_time = now
+                        self.corner_pass_count += 1
+                        logger.info(f"コーナー通過検知: {self.corner_pass_count}/4 (直近方向: {self._recent_corner_dir})")
+
+                        course_type = getattr(p, 'course_type', 'square')
+                        if course_type == 'square':
+                            if self.corner_pass_count >= 4:
+                                self.lap_count += 1
+                                self.last_lap_sec = round(now - self.lap_start_time, 2)
+                                self.lap_start_time = now
+                                self.corner_pass_count = 0
+                                logger.info(f"★ 四角コース 1周完走！ Lap {self.lap_count}: {self.last_lap_sec}秒")
+
                 self._recent_dx_history.append(float(info['offset_dx']))
                 self._recent_angle_history.append(float(info['angle_deg']))
+
 
                 is_first_detection = (self._prev_offset_dx is None)
                 curr_dx = float(info['offset_dx'])
@@ -451,11 +508,27 @@ class LineTraceEngine:
                     color = (0, 255, 255) if result.tracking_state == 'searching' else (0, 0, 255)
                     cv2.putText(debug, result.status_message, (10, h - 20), cv2.FONT_HERSHEY_PLAIN, 1.2, color, 2)
 
+                # 周回HUDオーバーレイ描画 (画面上部)
+                if debug is not None:
+                    c_type = getattr(p, 'course_type', 'square')
+                    c_label = "SQUARE" if c_type == 'square' else "OTHER"
+                    hud_text = f"[{c_label}] Lap: {self.lap_count} (C:{self.corner_pass_count}/4) Time:{self.current_lap_sec:.1f}s"
+                    cv2.putText(debug, hud_text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
+
         except Exception as e:
             logger.error(f"LineTrace処理エラー: {e}")
 
+        # 周回情報をresultに反映
+        self.current_lap_sec = round(now - self.lap_start_time, 2) if (self.active and self.lap_start_time > 0.0) else 0.0
+        result.course_type = getattr(p, 'course_type', 'square')
+        result.lap_count = self.lap_count
+        result.corner_pass_count = self.corner_pass_count
+        result.current_lap_sec = self.current_lap_sec
+        result.last_lap_sec = self.last_lap_sec
+
         self._last_result = result
         return result
+
 
     def get_rc_values(self, result: Optional[LineTraceResult] = None) -> Dict[str, int]:
         """
@@ -503,4 +576,10 @@ class LineTraceEngine:
             'segments_count': r.segments_count,
             'tracking_state': r.tracking_state,
             'status_message': r.status_message,
+            'course_type': r.course_type,
+            'lap_count': r.lap_count,
+            'corner_pass_count': r.corner_pass_count,
+            'current_lap_sec': r.current_lap_sec,
+            'last_lap_sec': r.last_lap_sec,
         }
+

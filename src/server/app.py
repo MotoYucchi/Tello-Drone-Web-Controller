@@ -52,6 +52,7 @@ async def lifespan(app: FastAPI):
     app_state['linetrace'] = LineTraceEngine()
     app_state['qr'] = QRCodeReader()
     app_state['logger'] = FlightLogger()
+    app_state['experimental_features'] = False  # 試験的機能フラグ (デフォルト無効)
 
     app_state['loop'] = asyncio.get_running_loop()
     app_state['qr_last_scan'] = 0.0
@@ -116,6 +117,7 @@ async def lifespan(app: FastAPI):
             result = lt.process_frame(frame)
             if fl:
                 fl.update_linetrace(lt.get_last_result_info())
+                fl.update_course_info(result.course_type, result.lap_count, result.last_lap_sec)
 
             if lt.active:
                 # LineTraceEngine が決定したRC制御値 (追従・ダンピング・自動復帰サーチ) を適用
@@ -124,6 +126,7 @@ async def lifespan(app: FastAPI):
                 if fl:
                     mode = "linetrace" if result.detected else f"lt_{result.tracking_state}"
                     fl.update_rc(rc['lr'], rc['fb'], 0, rc['yaw'], mode=mode)
+
     
     app_state['video'].on_frame = process_video_frame
 
@@ -234,6 +237,10 @@ class LineTraceParamsRequest(BaseModel):
     corner_memory_sec: float = Field(default=10.0, ge=0.5, le=30.0)
     lost_auto_rotate: bool = Field(default=False, description="ロスト時のホバリングで360度自動旋回探索")
     lost_backtrack: bool = Field(default=False, description="ロスト時に直前位置まで後退復帰")
+
+class CourseSettingRequest(BaseModel):
+    course_type: str = Field(default="square", description="square (四角コース: 4コーナーで1周) または other (その他)")
+
 
 
 # =========================================================================
@@ -624,6 +631,90 @@ async def get_linetrace_status():
         "params": lt.get_params(),
         "result": lt.get_last_result_info(),
     }
+
+
+@app.post("/api/linetrace/course")
+async def set_linetrace_course(req: CourseSettingRequest):
+    """コース種別設定 (square または other)"""
+    lt: LineTraceEngine = app_state['linetrace']
+    fl: FlightLogger = app_state.get('logger')
+    course_type = "square" if req.course_type == "square" else "other"
+    lt.params.course_type = course_type
+    lt.reset_lap_metrics()
+    if fl:
+        fl.update_course_info(course_type, 0, 0.0)
+        fl.log_event(f"Course changed to: {course_type}")
+    return {"success": True, "course_type": course_type}
+
+
+@app.post("/api/linetrace/reset_laps")
+async def reset_laps():
+    """周回数カウンターとラップタイムをリセット"""
+    lt: LineTraceEngine = app_state['linetrace']
+    fl: FlightLogger = app_state.get('logger')
+    lt.reset_lap_metrics()
+    if fl:
+        fl.update_course_info(lt.params.course_type, 0, 0.0)
+        fl.log_event("Lap metrics reset by user")
+    return {"success": True, "message": "周回トラッキングをリセットしました"}
+
+
+# =========================================================================
+# 試験的機能 (Experimental Features) API
+# =========================================================================
+
+@app.get("/api/experimental/status")
+async def get_experimental_status():
+    """試験的機能の有効状態を取得"""
+    return {
+        "enabled": app_state.get('experimental_features', False),
+    }
+
+
+@app.post("/api/experimental/enable")
+async def enable_experimental():
+    """試験的機能（ライントレース・周回記録・10Hz高頻度ログ）を有効化"""
+    app_state['experimental_features'] = True
+    fl: FlightLogger = app_state.get('logger')
+    if fl:
+        fl.set_interval(0.1)  # 10Hz高頻度ログに切り替え
+        fl.log_event("Experimental features enabled (10Hz logging)")
+    return {"success": True, "experimental_features": True, "message": "試験的機能を有効化しました (10Hz記録)"}
+
+
+@app.post("/api/experimental/disable")
+async def disable_experimental():
+    """試験的機能を無効化し、クリーンな通常手動モードへ安全リセット"""
+    app_state['experimental_features'] = False
+    lt: LineTraceEngine = app_state.get('linetrace')
+    tello: TelloUDPController = app_state.get('tello')
+    fl: FlightLogger = app_state.get('logger')
+
+    # 安全停止 & クリーンリセット
+    if lt:
+        lt.active = False
+        lt.reset_lap_metrics()
+    if tello:
+        tello.set_rc(0, 0, 0, 0)
+        if tello.rc_active:
+            tello.stop_rc()
+    if fl:
+        fl.set_interval(1.0)  # 通常1Hz記録に戻す
+        fl.update_rc(0, 0, 0, 0, mode="manual")
+        fl.log_event("Experimental features disabled (Clean reset)")
+
+    return {"success": True, "experimental_features": False, "message": "試験的機能を無効化しクリーンリセットしました"}
+
+
+@app.post("/api/experimental/toggle")
+async def toggle_experimental():
+    """試験的機能のON/OFF切り替え"""
+    current = app_state.get('experimental_features', False)
+    if current:
+        return await disable_experimental()
+    else:
+        return await enable_experimental()
+
 
 
 # =========================================================================

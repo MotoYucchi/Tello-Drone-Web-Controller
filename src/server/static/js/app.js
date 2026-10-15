@@ -353,13 +353,19 @@ const App = {
             if (elFpsInline) elFpsInline.textContent = `${video.fps || 0} FPS`;
             if (elIp) elIp.textContent = tello.local_ip || '--';
 
-            // LineTrace結果の更新
-            if (typeof LineTraceUI !== 'undefined' && lt.detected !== undefined) {
-                LineTraceUI.updateResultInfo(lt);
+            // LineTrace結果および周回数の更新
+            if (typeof LineTraceUI !== 'undefined') {
+                if (lt.detected !== undefined || lt.lap_count !== undefined) {
+                    LineTraceUI.updateResultInfo(lt);
+                }
+                if (msg.experimental_features !== undefined) {
+                    LineTraceUI.setExperimentalState(msg.experimental_features);
+                }
             }
         } else {
             this._resetTelemetryUI();
         }
+
 
         this._updateConnectionUI(this.connected);
     },

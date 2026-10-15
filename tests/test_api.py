@@ -119,3 +119,31 @@ def test_video_latency_and_buffer_reset_api(client):
     # 2. バッファリセット (未ストリーミング時は安全メッセージ返却)
     resp_reset = client.post("/api/video/reset_buffer")
     assert resp_reset.status_code == 200
+
+
+def test_experimental_and_course_api(client):
+    """試験的機能とコース周回設定APIのテスト"""
+    # 1. 試験的機能の初期状態
+    status_resp = client.get("/api/experimental/status")
+    assert status_resp.status_code == 200
+
+    # 2. 有効化
+    enable_resp = client.post("/api/experimental/enable")
+    assert enable_resp.status_code == 200
+    assert enable_resp.json()["experimental_features"] is True
+
+    # 3. コース設定 (四角コース)
+    course_resp = client.post("/api/linetrace/course", json={"course_type": "square"})
+    assert course_resp.status_code == 200
+    assert course_resp.json()["course_type"] == "square"
+
+    # 4. 周回数リセット
+    reset_resp = client.post("/api/linetrace/reset_laps")
+    assert reset_resp.status_code == 200
+    assert reset_resp.json()["success"] is True
+
+    # 5. 無効化 (クリーンリセット)
+    disable_resp = client.post("/api/experimental/disable")
+    assert disable_resp.status_code == 200
+    assert disable_resp.json()["experimental_features"] is False
+

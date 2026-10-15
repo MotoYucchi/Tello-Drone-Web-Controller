@@ -136,6 +136,7 @@ async def ws_telemetry(ws: WebSocket):
                         'data': tello.get_status()
                     })
 
+            exp_enabled = _app_state.get('experimental_features', False)
             data = {
                 'type': 'telemetry',
                 'timestamp': time.time(),
@@ -144,9 +145,13 @@ async def ws_telemetry(ws: WebSocket):
                 'video': video.get_stats() if video else {},
                 'linetrace': lt.get_params() if lt else {},
                 'linetrace_result': lt.get_last_result_info() if lt else {},
+                'experimental_features': exp_enabled,
             }
             await manager.send(ws, data)
-            await asyncio.sleep(1.0)
+            # 試験的機能有効時は周回・ライントレースHUDのリアルタイム反映のため250ms周期、通常時は1.0s周期
+            sleep_time = 0.25 if (exp_enabled or (lt and lt.active)) else 1.0
+            await asyncio.sleep(sleep_time)
+
 
     except WebSocketDisconnect:
         manager.disconnect(ws)
