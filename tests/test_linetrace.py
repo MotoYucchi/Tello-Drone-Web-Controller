@@ -390,3 +390,45 @@ def test_lost_backtrack_mode():
     assert rc['fb'] == -20, "ロスト前の場所まで後退復帰すること"
 
 
+def test_corner_forward_speed_configurable():
+    """コーナー時の前進速度手動設定 (1〜100) の検証"""
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+    engine.active = True
+
+    img_corner = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img_corner, (240, 360), (240, 240), (0, 0, 255), 14)
+    cv2.line(img_corner, (240, 240), (400, 240), (0, 0, 255), 14)
+
+    # 1. デフォルト設定 (corner_forward_speed=8)
+    engine.params.corner_forward_speed = 8
+    res1 = engine.process_frame(img_corner)
+    assert res1.is_corner is True
+    rc1 = engine.get_rc_values(res1)
+    assert rc1['fb'] == 8
+
+    # 2. 手動設定変更 (corner_forward_speed=25)
+    engine.set_params({'corner_forward_speed': 25})
+    assert engine.params.corner_forward_speed == 25
+    res2 = engine.process_frame(img_corner)
+    rc2 = engine.get_rc_values(res2)
+    assert rc2['fb'] == 25
+
+    # 3. 範囲制限 (1〜100) のクランプ検証
+    engine.set_params({'corner_forward_speed': 150})
+    assert engine.params.corner_forward_speed == 100
+    engine.set_params({'corner_forward_speed': 0})
+    assert engine.params.corner_forward_speed == 1
+
+    # 4. コーナー通過直後の直線追従で前進速度がスタックしないことの検証
+    img_straight = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img_straight, (240, 360), (240, 100), (0, 0, 255), 14)
+    res_straight = engine.process_frame(img_straight)
+    assert res_straight.detected is True
+    assert res_straight.is_corner is False
+    rc_straight = engine.get_rc_values(res_straight)
+    assert rc_straight['fb'] > 3, "コーナー後の直線で前進速度が低速ロック(fb<=3)してはいけません"
+
+
+

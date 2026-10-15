@@ -72,6 +72,7 @@ It addresses practical challenges such as packet routing on dual-network machine
 | **Line Tracking** | LSD Line Detection | Line segment extraction via OpenCV LSD |
 | | Dual Camera Modes | Standard (Yaw-based) vs. Downward-facing (Roll-based) control |
 | | Failsafe Actions | Instant hovering on line loss, speed reduction on 90-degree corners |
+| | Corner Forward Speed Control | Configurable forward speed during cornering (1-100) |
 | | Corner Memory & Recovery | Turn direction retention (up to 20s), backtrack reverse (speed up to 48), 360° auto-rotate search |
 | | Square Course Lap Tracking (Experimental) | Automatic lap count and lap timer based on 4 detected corners with HUD overlay |
 | **Data & Tools** | Flight Logging | CSV timeline export per flight session (1Hz standard / 10Hz experimental) |
@@ -146,7 +147,7 @@ Open `http://localhost:8000` in your browser (or `http://<PC_IP>:8000` from mobi
 # Start server
 uv run python -m src
 
-# Run test suite (37 automated test cases)
+# Run test suite (38 automated test cases)
 uv run pytest -v
 ```
 
@@ -212,8 +213,9 @@ When accessing the web app from a touchscreen device over the local network:
   - **PD Damping Brake**: Detects approach velocity toward center and applies reverse damping torque ($\frac{d(dx)}{dt}$) to counter rotational inertia and suppress overshoot oscillation.
   - **EMA Smoothing Filter**: Applies Exponential Moving Average to yaw/roll control values, attenuating high-frequency vision noise for steady flight.
   - **Turn & Deviation Deceleration**: Automatically reduces forward speed during tight turns or significant offset to prevent running off the track.
+  - **Corner Forward Speed Control (1-100)**: Configure the forward speed during corner turns (`corner_forward_speed`) manually via UI slider or API (range 1-100), tailoring cornering momentum to battery and thrust conditions.
 - **Auto-Recovery State Machine (Line Lost)**:
-  - **Corner Memory**: For standard drones, if a 90° corner or sharp turn is overshot, the system retains the detected turn direction (right or left) for a configurable duration (default 10s, adjustable 1-20s via UI slider) to prevent scanning in the wrong direction. During turns, forward speed is kept low until re-aligned to enhance corner curving capability.
+  - **Corner Memory**: For standard drones, if a 90° corner or sharp turn is overshot, the system retains the detected turn direction (right or left) for a configurable duration (default 10s, adjustable 1-20s via UI slider) to guide backtrack recovery and scanning directions if the line is lost.
   - **Phase 1 (0.0s - 0.4s) Inertia Stabilization**: Sets forward speed to 0 and commands neutral hover to cancel forward momentum.
   - **Phase 2 (0.4s - 3.5s) Backtrack Recovery & Scan**:
     - **Standard Drone (Forward tilt)**: If a corner was recently detected, executes reverse flight (speed up to 48, configurable via UI) while yawing toward the remembered direction to pull the overshot line back into the camera FOV. With the "Backtrack on Lost" option enabled, reverse flight is also executed on straight/curved line loss to retrace back to the last known position.

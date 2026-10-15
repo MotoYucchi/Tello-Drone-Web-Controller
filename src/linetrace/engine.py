@@ -64,6 +64,7 @@ class LineTraceParams:
 
     # 制御パラメータ
     forward_speed: int = 12       # 基準前進速度 (0-100, 初期値12でふらつきを防止)
+    corner_forward_speed: int = 8 # コーナー旋回時の前進速度 (1〜100, 手動設定可能)
     deadzone: float = 15.0        # 不感帯 (ピクセル, スムースランプ適用)
     yaw_limit: float = 35.0       # 旋回リミット (-100〜100, 急旋回・過回転を防止)
     lr_limit: float = 25.0        # 改造機体 横移動リミット
@@ -181,7 +182,16 @@ class LineTraceEngine:
                 current_attr = getattr(self.params, key)
                 target_type = type(current_attr)
                 try:
-                    setattr(self.params, key, target_type(val))
+                    casted = target_type(val)
+                    if key == 'corner_forward_speed':
+                        casted = max(1, min(100, int(casted)))
+                    elif key == 'forward_speed':
+                        casted = max(0, min(100, int(casted)))
+                    elif key == 'corner_recovery_back_speed':
+                        casted = max(0, min(48, int(casted)))
+                    elif key == 'corner_memory_sec':
+                        casted = max(0.5, min(30.0, float(casted)))
+                    setattr(self.params, key, casted)
                 except (ValueError, TypeError):
                     setattr(self.params, key, val)
 
@@ -215,6 +225,7 @@ class LineTraceEngine:
             'v_max': self.params.v_max,
             'gaussian_ksize': self.params.gaussian_ksize,
             'forward_speed': self.params.forward_speed,
+            'corner_forward_speed': self.params.corner_forward_speed,
             'deadzone': self.params.deadzone,
             'yaw_limit': self.params.yaw_limit,
             'kp_yaw_standard': self.params.kp_yaw_standard,
@@ -337,22 +348,16 @@ class LineTraceEngine:
 
                 raw_fb = float(info['forward_speed'])
 
-                # コーナー旋回中の追従能力向上:
-                # 直近にコーナーを検知しており、まだ機首が新しいライン方向に十分に整っていない場合
-                # 前進速度を抑え(fb <= 3)、コーナー方向への旋回を優先してコースアウト・通り過ぎを防止する
-                had_recent_corner = (self._recent_corner_dir in ('right', 'left')) and ((now - self._last_corner_time) < memory_sec)
-                if p.camera_mode == "standard" and had_recent_corner:
-                    target_ang = abs(float(info.get('angle_deg', 0.0)))
-                    target_dx = abs(float(info.get('offset_dx', 0.0)))
-                    is_corner_now = bool(info.get('is_corner', False))
-                    if is_corner_now or target_ang > 18.0 or target_dx > 35.0:
-                        # まだコーナー検出中または旋回中
-                        raw_fb = min(3.0, raw_fb)
-                        corner_sign = 1.0 if self._recent_corner_dir == 'right' else -1.0
-                        raw_yaw = corner_sign * max(abs(raw_yaw), min(yaw_limit, 35.0))
-                    elif (now - self._last_corner_time) > 1.2:
-                        # コーナー検知から時間が経過し、新ラインに完全に姿勢が整ったら解除
-                        self._recent_corner_dir = 'none'
+                # コーナー時の前進速度制御 (手動設定値 corner_forward_speed: 1〜100)
+                # コーナー検出時および直後の旋回中 (最大1.0秒以内かつ旋回中) は設定されたコーナー前進速度を適用
+                corner_f_speed = float(getattr(p, 'corner_forward_speed', 8))
+                is_corner_now = bool(info.get('is_corner', False))
+                time_since_corner = now - self._last_corner_time
+                if is_corner_now or (time_since_corner < 1.0 and self._recent_corner_dir in ('right', 'left') and abs(raw_yaw) > 15.0):
+                    raw_fb = corner_f_speed
+                    if is_corner_now:
+                        # コーナー検知時はEMAの平滑化遅延によるオーバーランを防ぎ即時速度反映
+                        self._filtered_fb = corner_f_speed
 
                 # 3. EMA (指数移動平均) フィルタで高周波のふらつきを平滑化
                 # 初回検出時は過去値がないためウォームスタートで即応性を確保

@@ -359,9 +359,10 @@ class LineTraceAlgorithm:
             yaw = int(target_angle * kp_yaw)
             yaw = max(-int(yaw_limit), min(int(yaw_limit), yaw))
 
-            # 前進速度: コーナー検出時は減速
+            # 前進速度: コーナー検出時は設定されたコーナー速度を適用
             if is_corner:
-                fb = 5
+                corner_speed = int(getattr(params, 'corner_forward_speed', 8))
+                fb = max(1, min(100, corner_speed))
                 if corner_dir == 'right':
                     yaw = 30
                     lr = int(lr_limit)
@@ -388,8 +389,9 @@ class LineTraceAlgorithm:
             lr = 0
 
             if is_corner:
-                # コーナーを通り過ぎて見失うのを防ぐため、前進速度を2に落としてその場旋回を優先
-                fb = 2
+                # コーナー旋回時の前進速度 (手動設定値 1〜100)
+                corner_speed = int(getattr(params, 'corner_forward_speed', 8))
+                fb = max(1, min(100, corner_speed))
                 corner_yaw = min(yaw_limit, 45.0)
                 yaw = int(corner_yaw if corner_dir == 'right' else -corner_yaw)
             else:

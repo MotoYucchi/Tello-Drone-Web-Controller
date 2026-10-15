@@ -233,6 +233,7 @@ class LineTraceParamsRequest(BaseModel):
     v_max: int = Field(default=255, ge=0, le=255)
     gaussian_ksize: int = Field(default=5, ge=1, le=31)
     forward_speed: int = Field(default=15, ge=0, le=100)
+    corner_forward_speed: int = Field(default=8, ge=1, le=100, description="コーナー時の前進速度 (1〜100)")
     deadzone: float = Field(default=20.0, ge=0, le=200)
     yaw_limit: float = Field(default=60.0, ge=0, le=100)
     corner_recovery_back_speed: int = Field(default=10, ge=0, le=48)

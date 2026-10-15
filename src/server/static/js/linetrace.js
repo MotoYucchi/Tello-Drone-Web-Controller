@@ -16,6 +16,7 @@ const LineTraceUI = {
         'ltVMin': 'v_min',
         'ltVMax': 'v_max',
         'ltSpeed': 'forward_speed',
+        'ltCornerForwardSpeed': 'corner_forward_speed',
         'ltCornerBackSpeed': 'corner_recovery_back_speed',
         'ltCornerMemorySec': 'corner_memory_sec',
     },

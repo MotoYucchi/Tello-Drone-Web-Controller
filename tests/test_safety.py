@@ -115,11 +115,11 @@ def test_rc_values_strict_clamp():
 
 def test_corner_slowdown_safety():
     """
-    安全性テスト 5: 直角コーナーおよび急カーブでの速度抑制
-    直角コーナーを検出した際、オーバースピードによるコースアウトを防ぐため
-    前進速度が自動的に微速 (fb <= 5) に減速されること。
+    安全性テスト 5: 直角コーナーでの速度制御 (設定値 corner_forward_speed の適用)
+    直角コーナーを検出した際、手動設定されたコーナー速度 (1〜100) が反映され、
+    オーバースピードによるコースアウトを抑制すること。
     """
-    params = LineTraceParams(forward_speed=30, yaw_limit=60.0)
+    params = LineTraceParams(forward_speed=30, corner_forward_speed=8, yaw_limit=60.0)
 
     # 直角コーナー判定時
     info = {}
@@ -129,7 +129,8 @@ def test_corner_slowdown_safety():
         is_corner=True, corner_dir='right'
     )
 
-    assert info['forward_speed'] <= 5, "直角コーナー検出時に十分減速されていません"
+    assert info['forward_speed'] == 8, "直角コーナー検出時に設定されたコーナー前進速度が適用されていません"
+    assert info['forward_speed'] < params.forward_speed, "通常巡航速度から減速されていません"
     assert info['yaw_value'] > 0, "右コーナーに対して右旋回が指示されていません"
 
 

@@ -42,6 +42,7 @@ def test_linetrace_params(client):
         "v_max": 255,
         "gaussian_ksize": 7,
         "forward_speed": 20,
+        "corner_forward_speed": 25,
         "deadzone": 15.0,
         "yaw_limit": 50.0,
         "corner_recovery_back_speed": 48,
@@ -55,6 +56,7 @@ def test_linetrace_params(client):
     assert data["success"] is True
     assert data["params"]["camera_mode"] == "downward"
     assert data["params"]["forward_speed"] == 20
+    assert data["params"]["corner_forward_speed"] == 25
     assert data["params"]["gaussian_ksize"] == 7
     assert data["params"]["corner_recovery_back_speed"] == 48
     assert data["params"]["corner_memory_sec"] == 15.0
