@@ -285,20 +285,15 @@ const LineTraceUI = {
     },
 
     /**
-     * 試験的機能の表示状態を同期
+     * 試験的機能の表示状態を同期 (四角コース周回記録ボックスの表示切替)
      */
     setExperimentalState(enabled) {
         const toggleExp = document.getElementById('toggleExperimental');
         if (toggleExp) toggleExp.checked = !!enabled;
 
-        const panel = document.getElementById('panel-linetrace');
-        if (panel) {
-            panel.style.display = enabled ? 'block' : 'none';
-        }
-
-        const mobileTab = document.querySelector('.mobile-tab-btn[data-target="panel-linetrace"]');
-        if (mobileTab) {
-            mobileTab.style.display = enabled ? 'inline-flex' : 'none';
+        const expBox = document.getElementById('boxExperimentalCourse');
+        if (expBox) {
+            expBox.style.display = enabled ? 'block' : 'none';
         }
     }
 };

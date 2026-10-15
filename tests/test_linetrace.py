@@ -431,4 +431,63 @@ def test_corner_forward_speed_configurable():
     assert rc_straight['fb'] > 3, "コーナー後の直線で前進速度が低速ロック(fb<=3)してはいけません"
 
 
+def test_horizontal_segment_penalty_in_anchor_selection():
+    """横向き線分(|angle|>65°)のペナルティによる主アンカー誤選択防止テスト"""
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+
+    # 画面下部に横線、中央から上部に縦線が存在する画像
+    img = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img, (100, 320), (380, 320), (0, 0, 255), 14) # 水平横線 (|angle| ~ 90°)
+    cv2.line(img, (240, 340), (240, 100), (0, 0, 255), 14) # 進行方向縦線 (|angle| ~ 0°)
+
+    res = engine.process_frame(img)
+    assert res.detected is True
+    # アンカーとして縦線が選ばれ、水平角(約90度)に誤誘導されないこと
+    assert abs(res.angle_deg) < 45.0, f"アンカーに横線が誤選択されています: angle={res.angle_deg}"
+
+
+def test_filtered_derivative_anti_oscillation():
+    """微小なフレーム間検出ノイズに対するローパスフィルタ・ダンピング制動テスト"""
+    import time
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+
+    # 微小に左右ジッターするフレームを数回入力
+    positions = [240, 246, 237, 244, 239]
+    yaw_history = []
+    for pos in positions:
+        img = np.zeros((360, 480, 3), dtype=np.uint8)
+        cv2.line(img, (pos, 360), (pos, 100), (0, 0, 255), 14)
+        res = engine.process_frame(img)
+        yaw_history.append(res.yaw_value)
+        time.sleep(0.033)
+
+    # ジッターに対してYawが極端なサチュレーション(±15度以上の急反転)を起こさず穏やかであること
+    for y in yaw_history:
+        assert abs(y) <= 10, f"微小ジッターで旋回が暴走しています: yaw={y}"
+
+
+def test_smooth_speed_under_sharp_turn():
+    """急旋回時でも前進速度が失速(ゼロまたは5未満)せず滑らかに維持されることの検証"""
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+    engine.params.forward_speed = 12
+    engine.active = True
+
+    # 大きく傾いた斜め線 (急旋回が必要な状況)
+    img = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img, (160, 350), (320, 150), (0, 0, 255), 14)
+
+    res = engine.process_frame(img)
+    assert res.detected is True
+    rc = engine.get_rc_values(res)
+    assert rc['fb'] >= 6, f"急旋回時に前進速度が失速しています: fb={rc['fb']}"
+    assert rc['fb'] <= 12, "前進速度が巡航速度を超えてはいけません"
+
+
+
 

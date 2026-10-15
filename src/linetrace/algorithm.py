@@ -184,6 +184,9 @@ class LineTraceAlgorithm:
                     temporal_dist = math.hypot(seg['mid_x'] - prev_target[0], seg['mid_y'] - prev_target[1])
 
                 score = (seg['length'] * 2.0) - (dist_from_bottom * 1.5) - (dist_from_cx * 0.8) - (temporal_dist * 0.5)
+                # 進行方向と大きく異なる横向きの線分 (|angle| > 65°) は主ライン(アンカー)として選定しないようペナルティ付与
+                if abs(seg['angle']) > 65.0:
+                    score -= 200.0
                 return score
 
             valid_segments.sort(key=segment_score, reverse=True)
@@ -370,9 +373,9 @@ class LineTraceAlgorithm:
                     yaw = -30
                     lr = -int(lr_limit)
             else:
-                # 角度ズレやオフセットが大きい場合は前進を減速
-                slowdown = min(0.70, (abs(target_angle) / 60.0) * 0.4 + (abs(effective_dx) / 120.0) * 0.4)
-                fb = max(5, int(base_speed * (1.0 - slowdown)))
+                # 角度ズレやオフセットが大きい場合は前進を滑らかに減速 (ピッチ揺れ防止)
+                slowdown = min(0.40, (abs(target_angle) / 60.0) * 0.25 + (abs(effective_dx) / 120.0) * 0.20)
+                fb = max(6, int(base_speed * (1.0 - slowdown)))
 
         else:
             # =================================================================
@@ -395,9 +398,9 @@ class LineTraceAlgorithm:
                 corner_yaw = min(yaw_limit, 45.0)
                 yaw = int(corner_yaw if corner_dir == 'right' else -corner_yaw)
             else:
-                # 旋回量や横ズレが大きいときは前進を抑制してコースアウトを防止
-                turn_penalty = min(0.70, (abs(yaw) / float(yaw_limit)) * 0.5 + (abs(effective_dx) / 120.0) * 0.4)
-                fb = max(5, int(base_speed * (1.0 - turn_penalty)))
+                # 旋回量や横ズレによる前進減速 (過剰な急減速による失速・ピッチハンチングを防ぎ、安定巡航)
+                turn_penalty = min(0.40, (abs(yaw) / float(yaw_limit)) * 0.25 + (abs(effective_dx) / 120.0) * 0.20)
+                fb = max(6, int(base_speed * (1.0 - turn_penalty)))
 
         result_info['forward_speed'] = int(fb)
         result_info['lr_value'] = int(lr)

@@ -72,7 +72,7 @@ class LineTraceParams:
     # ゲイン設定 (ふらふら防止チューニング)
     kp_yaw_standard: float = 0.18 # 旋回Pゲイン (0.35から適正化しハンチングを排除)
     kd_yaw_standard: float = 0.25 # 角度先行Dゲイン
-    kd_damping: float = 0.20      # オフセット速度ダンピング (オーバーシュート制動)
+    kd_damping: float = 0.015     # オフセット速度ダンピング (オーバーシュート制動)
     kp_lr_downward: float = 0.16  # 改造機体 横移動Pゲイン
     kp_yaw_downward: float = 0.35 # 改造機体 旋回Pゲイン
 
@@ -139,6 +139,7 @@ class LineTraceEngine:
 
         # 制御平滑化・ダンピング用状態
         self._prev_offset_dx: Optional[float] = None
+        self._filtered_d_dx: float = 0.0
         self._prev_time: float = 0.0
         self._filtered_lr: float = 0.0
         self._filtered_fb: float = 0.0
@@ -324,15 +325,21 @@ class LineTraceEngine:
                 is_first_detection = (self._prev_offset_dx is None)
                 curr_dx = float(info['offset_dx'])
                 if not is_first_detection and dt > 1e-4:
-                    d_dx = (curr_dx - self._prev_offset_dx) / dt
+                    raw_d_dx = (curr_dx - self._prev_offset_dx) / dt
                 else:
-                    d_dx = 0.0
+                    raw_d_dx = 0.0
                 self._prev_offset_dx = curr_dx
 
                 # 1. ダンピング項の算出 (PD制御: オフセット変化率による逆トルク制動)
-                # 中央へ急速に戻っている時(d_dx < 0)は正の旋回を抑制(ブレーキ)し、オーバーシュートを防ぐ
+                # 画像処理ノイズを低減するためEMAフィルタで平滑化し、微小振動の増幅を防止
+                if is_first_detection:
+                    self._filtered_d_dx = 0.0
+                else:
+                    d_alpha = 0.25
+                    self._filtered_d_dx = d_alpha * raw_d_dx + (1.0 - d_alpha) * self._filtered_d_dx
+
                 kd_damp = getattr(p, 'kd_damping', 0.015)
-                damping_yaw = max(-15.0, min(15.0, d_dx * kd_damp))
+                damping_yaw = max(-6.0, min(6.0, self._filtered_d_dx * kd_damp))
 
                 # 2. 基本指令値 (P項 + D項ダンピング適用とリミット)
                 raw_yaw = float(info['yaw_value']) + damping_yaw
@@ -341,7 +348,7 @@ class LineTraceEngine:
 
                 raw_lr = float(info['lr_value'])
                 if p.camera_mode == "downward":
-                    damping_lr = max(-10.0, min(10.0, d_dx * 0.01))
+                    damping_lr = max(-5.0, min(5.0, self._filtered_d_dx * 0.01))
                     raw_lr += damping_lr
                     lr_limit = float(getattr(p, 'lr_limit', 25.0))
                     raw_lr = max(-lr_limit, min(lr_limit, raw_lr))
@@ -380,6 +387,7 @@ class LineTraceEngine:
             else:
                 self._prev_target = None
                 self._prev_offset_dx = None
+                self._filtered_d_dx = 0.0
 
                 # ラインロスト時の処理
                 if self.active and p.auto_recovery and self._last_seen_time > 0:
@@ -389,8 +397,8 @@ class LineTraceEngine:
                     memory_sec = getattr(p, 'corner_memory_sec', 10.0)
                     had_recent_corner = (self._recent_corner_dir in ('right', 'left')) and ((now - self._last_corner_time) < memory_sec)
 
-                    if lost_sec < 0.4:
-                        # Phase 1: 慣性減速・ホバリング安定化 (0.0s〜0.4s)
+                    if lost_sec < 0.25:
+                        # Phase 1: 慣性減速・初期安定化 (0.0s〜0.25s)
                         self._filtered_lr = 0.0
                         self._filtered_fb = 0.0
                         self._filtered_yaw = 0.0
@@ -400,8 +408,8 @@ class LineTraceEngine:
                         result.tracking_state = 'stabilizing'
                         result.status_message = '姿勢安定化中 (ホバリング)'
 
-                    elif lost_sec < 3.5:
-                        # Phase 2: 直前見失い方向への自動スキャン探索 & 後退復帰 (0.4s〜3.5s)
+                    elif lost_sec < 4.0:
+                        # Phase 2: 直前見失い方向への自動スキャン探索 & 後退復帰 (0.25s〜4.0s)
                         # 判定優先順位: 1) 直近コーナー履歴, 2) 過去の平均傾き, 3) 最終dx
                         if had_recent_corner:
                             search_dir = 1 if self._recent_corner_dir == 'right' else -1
@@ -444,7 +452,7 @@ class LineTraceEngine:
 
                         result.tracking_state = 'searching'
 
-                    elif lost_sec < 5.5:
+                    elif lost_sec < 6.5:
                         # Phase 3: 探索継続 (コーナー記憶中はコーナー方向を維持、それ以外は反転スキャン)
                         if had_recent_corner:
                             search_dir = 1 if self._recent_corner_dir == 'right' else -1
@@ -471,7 +479,7 @@ class LineTraceEngine:
                             result.status_message = f'自動探索: {dir_str}方向反転スキャン'
 
                     else:
-                        # Phase 4: ロスト確定フェーズ (5.5s超)
+                        # Phase 4: ロスト確定フェーズ (6.5s超)
                         if getattr(p, 'lost_auto_rotate', False):
                             # オプション: ロスト時ホバリング自動旋回モード (360°探索スキャン)
                             self._filtered_lr = 0.0

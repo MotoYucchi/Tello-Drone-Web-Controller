@@ -149,3 +149,19 @@ def test_experimental_and_course_api(client):
     assert disable_resp.status_code == 200
     assert disable_resp.json()["experimental_features"] is False
 
+
+def test_linetrace_ui_visibility_and_experimental_scope(client):
+    """LineTraceパネルが初期状態で非表示にされず、試験的機能のスコープが限定されていることの検証"""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+
+    # panel-linetrace が style="display: none;" で隠されていないこと
+    assert '<section class="card tab-panel tab-active" id="panel-linetrace">' in html or '<section class="card tab-panel" id="panel-linetrace">' in html
+    assert 'id="panel-linetrace" style="display: none;"' not in html
+
+    # 試験的機能の対象が boxExperimentalCourse であること
+    assert 'id="boxExperimentalCourse"' in html
+    assert 'id="toggleExperimental"' in html
+
+

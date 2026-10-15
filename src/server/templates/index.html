@@ -20,7 +20,7 @@
         </div>
         <div class="header-right">
             <!-- Experimental Features Toggle -->
-            <label class="toggle-control text-xs" style="margin-right: 6px;" title="ライントレース・四角コース周回記録・10Hz高頻度ログを有効化">
+            <label class="toggle-control text-xs" style="margin-right: 6px;" title="四角コース周回記録・10Hz高頻度ログ等の試験的機能を有効化">
                 <input type="checkbox" id="toggleExperimental">
                 <span class="toggle-slider"></span>
                 <span class="toggle-label"><i class="fas fa-flask"></i> 試験的機能</span>
@@ -237,11 +237,10 @@
         <!-- ===== Right / Secondary Column: Controls, LineTrace, QR, Network ===== -->
         <div class="secondary-column">
 
-            <!-- LineTrace LSD Panel (試験的機能が有効な場合のみ表示) -->
-            <section class="card tab-panel" id="panel-linetrace" style="display: none;">
+            <!-- LineTrace LSD Panel -->
+            <section class="card tab-panel tab-active" id="panel-linetrace">
                 <div class="card-header">
                     <span class="card-title"><i class="fas fa-route"></i> LineTrace (LSD)</span>
-                    <span class="badge badge-warning text-xs" style="margin-left: 8px;">試験的</span>
                     <label class="toggle-control" style="margin-left:auto;">
                         <input type="checkbox" id="toggleLineTrace">
                         <span class="toggle-slider"></span>
@@ -249,11 +248,14 @@
                     </label>
                 </div>
                 <div class="card-body">
-                    <!-- Course & Lap Counter (Square Course Tracker) -->
-                    <div class="control-box mb-md" style="background: rgba(2, 132, 199, 0.08); border: 1.5px solid #0284c7; border-radius: 6px; padding: 10px;">
+                    <!-- Course & Lap Counter (Square Course Tracker: 試験的機能) -->
+                    <div id="boxExperimentalCourse" class="control-box mb-md" style="display: none; background: rgba(2, 132, 199, 0.08); border: 1.5px solid #0284c7; border-radius: 6px; padding: 10px;">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
                             <span class="box-title" style="font-weight:bold; color:#0284c7; margin:0;"><i class="fas fa-flag-checkered"></i> コース ＆ 周回数記録</span>
-                            <span class="badge badge-success text-xs" id="ltLogRateBadge" title="ログ収集周期">10Hz高頻度ログ中</span>
+                            <div style="display:flex; gap: 4px; align-items:center;">
+                                <span class="badge badge-warning text-xs">試験的</span>
+                                <span class="badge badge-success text-xs" id="ltLogRateBadge" title="ログ収集周期">10Hz高頻度ログ中</span>
+                            </div>
                         </div>
                         <div style="display:flex; gap: 8px; align-items:center; margin-bottom: 8px;">
                             <select id="ltCourseType" class="form-select" style="flex:1;">
