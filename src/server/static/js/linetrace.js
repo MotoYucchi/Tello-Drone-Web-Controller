@@ -17,6 +17,7 @@ const LineTraceUI = {
         'ltVMax': 'v_max',
         'ltSpeed': 'forward_speed',
         'ltCornerBackSpeed': 'corner_recovery_back_speed',
+        'ltCornerMemorySec': 'corner_memory_sec',
     },
 
     _sendTimeout: null,
@@ -52,7 +53,21 @@ const LineTraceUI = {
                 if (rowCorner) {
                     rowCorner.style.display = mode === 'standard' ? 'flex' : 'none';
                 }
+                const rowMemory = document.getElementById('rowCornerMemory');
+                if (rowMemory) {
+                    rowMemory.style.display = mode === 'standard' ? 'flex' : 'none';
+                }
             });
+        }
+
+        // Checkboxes
+        const chkBacktrack = document.getElementById('ltLostBacktrack');
+        if (chkBacktrack) {
+            chkBacktrack.addEventListener('change', () => this._sendParams());
+        }
+        const chkAutoRotate = document.getElementById('ltLostAutoRotate');
+        if (chkAutoRotate) {
+            chkAutoRotate.addEventListener('change', () => this._sendParams());
         }
 
         // Presets
@@ -74,7 +89,7 @@ const LineTraceUI = {
             if (!slider || !valueEl) continue;
 
             slider.addEventListener('input', () => {
-                valueEl.textContent = slider.value;
+                valueEl.textContent = sliderId === 'ltCornerMemorySec' ? `${slider.value}s` : slider.value;
                 this._debounceSendParams();
             });
         }
@@ -92,12 +107,21 @@ const LineTraceUI = {
         for (const [sliderId, paramName] of Object.entries(this.sliders)) {
             const slider = document.getElementById(sliderId);
             if (slider) {
-                params[paramName] = parseInt(slider.value, 10);
+                params[paramName] = sliderId === 'ltCornerMemorySec' ? parseFloat(slider.value) : parseInt(slider.value, 10);
             }
         }
         const cameraModeSelect = document.getElementById('ltCameraMode');
         if (cameraModeSelect) {
             params['camera_mode'] = cameraModeSelect.value;
+        }
+
+        const chkBacktrack = document.getElementById('ltLostBacktrack');
+        if (chkBacktrack) {
+            params['lost_backtrack'] = chkBacktrack.checked;
+        }
+        const chkAutoRotate = document.getElementById('ltLostAutoRotate');
+        if (chkAutoRotate) {
+            params['lost_auto_rotate'] = chkAutoRotate.checked;
         }
 
         App.wsSend({ type: 'linetrace_params', params });
@@ -113,8 +137,19 @@ const LineTraceUI = {
                 const slider = document.getElementById(sliderId);
                 const valueEl = document.getElementById(sliderId + 'Val');
                 if (slider) slider.value = params[paramName];
-                if (valueEl) valueEl.textContent = params[paramName];
+                if (valueEl) {
+                    valueEl.textContent = sliderId === 'ltCornerMemorySec' ? `${Math.round(params[paramName])}s` : params[paramName];
+                }
             }
+        }
+
+        if (params.lost_backtrack !== undefined) {
+            const chk = document.getElementById('ltLostBacktrack');
+            if (chk) chk.checked = !!params.lost_backtrack;
+        }
+        if (params.lost_auto_rotate !== undefined) {
+            const chk = document.getElementById('ltLostAutoRotate');
+            if (chk) chk.checked = !!params.lost_auto_rotate;
         }
 
         // Camera mode
@@ -124,6 +159,10 @@ const LineTraceUI = {
             const rowCorner = document.getElementById('rowCornerRecovery');
             if (rowCorner) {
                 rowCorner.style.display = params.camera_mode === 'standard' ? 'flex' : 'none';
+            }
+            const rowMemory = document.getElementById('rowCornerMemory');
+            if (rowMemory) {
+                rowMemory.style.display = params.camera_mode === 'standard' ? 'flex' : 'none';
             }
         }
 

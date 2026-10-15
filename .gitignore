@@ -5,4 +5,6 @@ __pycache__/
 .venv_back
 tello.code-workspace
 logs/
-.pytest_cache/
+.pytest_cache/
+.Tello-LSD-Poster/
+

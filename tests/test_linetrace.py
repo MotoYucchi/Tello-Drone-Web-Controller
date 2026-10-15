@@ -277,3 +277,116 @@ def test_standard_mode_corner_overshoot_recovery():
     assert rc['fb'] < 0, "通常機体で通り過ぎたラインを引き戻すため微後退(fb < 0)していること"
     assert "コーナー復帰中" in res_search.status_message
 
+
+def test_corner_recovery_back_speed_up_to_48():
+    """コーナー復帰後退の最大値48設定テスト"""
+    import time
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+    engine.active = True
+    engine.params.auto_recovery = True
+    engine.params.corner_recovery_back_speed = 48
+
+    # コーナー検出
+    img_corner = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img_corner, (240, 360), (240, 240), (0, 0, 255), 14)
+    cv2.line(img_corner, (240, 240), (400, 240), (0, 0, 255), 14)
+    engine.process_frame(img_corner)
+
+    # ロスト
+    blank = np.zeros((360, 480, 3), dtype=np.uint8)
+    engine._last_seen_time = time.time() - 1.0
+    res = engine.process_frame(blank)
+    rc = engine.get_rc_values(res)
+    assert rc['fb'] == -48, "後退速度48が正確に出力されること"
+
+
+def test_corner_memory_retention_extended():
+    """コーナー検出フレームの保持時間大幅延長テスト (10秒以上保持)"""
+    import time
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+    engine.active = True
+    engine.params.corner_memory_sec = 10.0
+
+    img_corner = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img_corner, (240, 360), (240, 240), (0, 0, 255), 14)
+    cv2.line(img_corner, (240, 240), (400, 240), (0, 0, 255), 14)
+    engine.process_frame(img_corner)
+    assert engine._recent_corner_dir == 'right'
+
+    # 6秒経過後もコーナー記憶が保持されていること (以前の3秒制限を大きく超えても維持)
+    engine._last_corner_time = time.time() - 6.0
+    blank = np.zeros((360, 480, 3), dtype=np.uint8)
+    engine._last_seen_time = time.time() - 1.0
+    res = engine.process_frame(blank)
+    assert engine._recent_corner_dir == 'right'
+    rc = engine.get_rc_values(res)
+    assert rc['yaw'] > 0
+    assert rc['fb'] < 0
+
+
+def test_lost_hover_auto_rotate_option():
+    """ロスト時のホバリングで自動旋回モードの検証"""
+    import time
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.active = True
+    engine.params.auto_recovery = True
+    engine.params.lost_auto_rotate = True
+
+    # ライン検出中からロストへ
+    img = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img, (240, 360), (240, 100), (0, 0, 255), 14)
+    engine.process_frame(img)
+
+    # 6秒以上ロスト (Phase 4: ロスト確定フェーズ)
+    blank = np.zeros((360, 480, 3), dtype=np.uint8)
+    engine._last_seen_time = time.time() - 6.5
+    res = engine.process_frame(blank)
+
+    assert res.tracking_state == 'searching'
+    assert "ホバリング自動旋回中" in res.status_message
+    rc = engine.get_rc_values(res)
+    assert rc['yaw'] != 0, "自動旋回モードではホバリング中もYaw旋回を継続して探索すること"
+    assert rc['fb'] == 0, "ホバリング中なので前進・後退はゼロであること"
+
+    # オプション無効時は停止待機
+    engine.params.lost_auto_rotate = False
+    res2 = engine.process_frame(blank)
+    assert res2.tracking_state == 'lost'
+    rc2 = engine.get_rc_values(res2)
+    assert rc2['yaw'] == 0
+    assert rc2['fb'] == 0
+
+
+def test_lost_backtrack_mode():
+    """非コーナー時の直前位置後退復帰オプションテスト"""
+    import time
+    engine = LineTraceEngine()
+    engine.apply_preset('red')
+    engine.params.camera_mode = "standard"
+    engine.active = True
+    engine.params.auto_recovery = True
+    engine.params.lost_backtrack = True
+    engine.params.corner_recovery_back_speed = 20
+
+    # 直線検出
+    img = np.zeros((360, 480, 3), dtype=np.uint8)
+    cv2.line(img, (240, 360), (240, 100), (0, 0, 255), 14)
+    engine.process_frame(img)
+    assert engine._recent_corner_dir == 'none'
+
+    # ロスト (Phase 2: 1.0秒後)
+    blank = np.zeros((360, 480, 3), dtype=np.uint8)
+    engine._last_seen_time = time.time() - 1.0
+    res = engine.process_frame(blank)
+
+    assert res.tracking_state == 'searching'
+    assert "直前位置へ後退中" in res.status_message
+    rc = engine.get_rc_values(res)
+    assert rc['fb'] == -20, "ロスト前の場所まで後退復帰すること"
+
+

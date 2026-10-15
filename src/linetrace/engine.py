@@ -79,8 +79,10 @@ class LineTraceParams:
     ema_alpha: float = 0.35       # EMA平滑化係数 (0.0〜1.0)
     auto_recovery: bool = True    # ラインロスト時の自動探索・復帰機能
     search_yaw_speed: int = 20    # 自動探索時の旋回速度
-    corner_recovery_back_speed: int = 8  # 通常機体でコーナーロスト時の後退速度 (オーバーシュート復帰)
-    corner_memory_sec: float = 3.0       # コーナー検出情報の保持時間 (秒)
+    corner_recovery_back_speed: int = 10 # 通常機体でコーナー/ロスト時の後退速度 (0〜48)
+    corner_memory_sec: float = 10.0      # コーナー検出情報の保持時間 (秒, 1.0〜20.0)
+    lost_auto_rotate: bool = False      # ロスト時のホバリングで360度自動旋回探索
+    lost_backtrack: bool = False        # ロスト時に直前位置まで後退復帰 (非コーナー時も後退)
 
     # ROI設定 (通常機体)
     roi_top_ratio_standard: float = 0.50
@@ -140,8 +142,8 @@ class LineTraceEngine:
         # コーナー記憶メモリ (直前のフレームで上書き消去されない耐障害性バッファ)
         self._recent_corner_dir: str = 'none'
         self._last_corner_time: float = 0.0
-        self._recent_dx_history = collections.deque(maxlen=20)
-        self._recent_angle_history = collections.deque(maxlen=20)
+        self._recent_dx_history = collections.deque(maxlen=30)
+        self._recent_angle_history = collections.deque(maxlen=30)
 
     def set_params(self, params_dict: Dict[str, Any]) -> None:
         """パラメータ一括設定"""
@@ -191,6 +193,8 @@ class LineTraceEngine:
             'auto_recovery': self.params.auto_recovery,
             'corner_recovery_back_speed': self.params.corner_recovery_back_speed,
             'corner_memory_sec': self.params.corner_memory_sec,
+            'lost_auto_rotate': self.params.lost_auto_rotate,
+            'lost_backtrack': self.params.lost_backtrack,
             'active': self.active,
         }
 
@@ -236,13 +240,14 @@ class LineTraceEngine:
                 self._last_seen_angle = float(info['angle_deg'])
 
                 # コーナー方向の記憶:
-                # 直前1〜2フレームで 'none' になっても、過去数秒間のコーナー検出履歴を確実に保持する
+                # 直前1〜2フレームで 'none' になっても、設定された保持時間(デフォルト10秒)だけ履歴を確実に保持する
                 corner_dir = str(info.get('corner_dir', 'none'))
+                memory_sec = getattr(p, 'corner_memory_sec', 10.0)
                 if corner_dir in ('right', 'left'):
                     self._last_corner_dir = corner_dir
                     self._recent_corner_dir = corner_dir
                     self._last_corner_time = now
-                elif (now - self._last_corner_time) > getattr(p, 'corner_memory_sec', 3.0):
+                elif (now - self._last_corner_time) > memory_sec:
                     self._recent_corner_dir = 'none'
 
                 self._recent_dx_history.append(float(info['offset_dx']))
@@ -275,6 +280,23 @@ class LineTraceEngine:
 
                 raw_fb = float(info['forward_speed'])
 
+                # コーナー旋回中の追従能力向上:
+                # 直近にコーナーを検知しており、まだ機首が新しいライン方向に十分に整っていない場合
+                # 前進速度を抑え(fb <= 3)、コーナー方向への旋回を優先してコースアウト・通り過ぎを防止する
+                had_recent_corner = (self._recent_corner_dir in ('right', 'left')) and ((now - self._last_corner_time) < memory_sec)
+                if p.camera_mode == "standard" and had_recent_corner:
+                    target_ang = abs(float(info.get('angle_deg', 0.0)))
+                    target_dx = abs(float(info.get('offset_dx', 0.0)))
+                    is_corner_now = bool(info.get('is_corner', False))
+                    if is_corner_now or target_ang > 18.0 or target_dx > 35.0:
+                        # まだコーナー検出中または旋回中
+                        raw_fb = min(3.0, raw_fb)
+                        corner_sign = 1.0 if self._recent_corner_dir == 'right' else -1.0
+                        raw_yaw = corner_sign * max(abs(raw_yaw), min(yaw_limit, 35.0))
+                    elif (now - self._last_corner_time) > 1.2:
+                        # コーナー検知から時間が経過し、新ラインに完全に姿勢が整ったら解除
+                        self._recent_corner_dir = 'none'
+
                 # 3. EMA (指数移動平均) フィルタで高周波のふらつきを平滑化
                 # 初回検出時は過去値がないためウォームスタートで即応性を確保
                 alpha = getattr(p, 'ema_alpha', 0.35)
@@ -302,7 +324,7 @@ class LineTraceEngine:
                     lost_sec = now - self._last_seen_time
 
                     # 直近にコーナー検知があったか (コーナーを通り過ぎた可能性が高いか)
-                    memory_sec = getattr(p, 'corner_memory_sec', 3.0)
+                    memory_sec = getattr(p, 'corner_memory_sec', 10.0)
                     had_recent_corner = (self._recent_corner_dir in ('right', 'left')) and ((now - self._last_corner_time) < memory_sec)
 
                     if lost_sec < 0.4:
@@ -316,8 +338,8 @@ class LineTraceEngine:
                         result.tracking_state = 'stabilizing'
                         result.status_message = '姿勢安定化中 (ホバリング)'
 
-                    elif lost_sec < 3.0:
-                        # Phase 2: 直前見失い方向への自動スキャン探索 (0.4s〜3.0s)
+                    elif lost_sec < 3.5:
+                        # Phase 2: 直前見失い方向への自動スキャン探索 & 後退復帰 (0.4s〜3.5s)
                         # 判定優先順位: 1) 直近コーナー履歴, 2) 過去の平均傾き, 3) 最終dx
                         if had_recent_corner:
                             search_dir = 1 if self._recent_corner_dir == 'right' else -1
@@ -329,7 +351,7 @@ class LineTraceEngine:
                         else:
                             search_dir = -1
 
-                        search_speed = getattr(p, 'search_yaw_speed', 20)
+                        search_speed = getattr(p, 'search_yaw_speed', 25)
                         dir_str = "右" if search_dir > 0 else "左"
 
                         if p.camera_mode == "downward":
@@ -343,27 +365,33 @@ class LineTraceEngine:
                             result.lr_value = 0
                             result.yaw_value = int(search_dir * search_speed)
 
+                            back_speed = getattr(p, 'corner_recovery_back_speed', 10)
+                            back_speed = max(0, min(48, int(back_speed)))
+
                             if had_recent_corner:
-                                # コーナーを通り過ぎた場合: 微低速で後退しながら旋回し、真下・後ろに抜けたラインを前方カメラ視野内に引き戻す
-                                back_speed = getattr(p, 'corner_recovery_back_speed', 8)
-                                result.forward_speed = -int(back_speed)
+                                # コーナーを通り過ぎた場合: 設定速度(最大48)で後退しながら旋回し、真下・後ろに抜けたラインを前方カメラ視野内に引き戻す
+                                result.forward_speed = -back_speed
                                 result.status_message = f'自動探索: コーナー復帰中 ({dir_str}旋回+微後退)'
+                            elif getattr(p, 'lost_backtrack', False) and back_speed > 0:
+                                # オプション: 全ロスト時の後退復帰 (ロスト前の位置まで後退)
+                                result.forward_speed = -back_speed
+                                result.status_message = f'自動探索: 直前位置へ後退中 ({dir_str}微スキャン)'
                             else:
                                 result.forward_speed = 0
                                 result.status_message = f'自動探索: {dir_str}方向スキャン'
 
                         result.tracking_state = 'searching'
 
-                    elif lost_sec < 5.0:
-                        # Phase 3: 逆方向反転スキャン (3.0s〜5.0s)
+                    elif lost_sec < 5.5:
+                        # Phase 3: 探索継続 (コーナー記憶中はコーナー方向を維持、それ以外は反転スキャン)
                         if had_recent_corner:
-                            search_dir = -1 if self._recent_corner_dir == 'right' else 1
+                            search_dir = 1 if self._recent_corner_dir == 'right' else -1
                         elif self._last_seen_dx > 5.0 or self._last_seen_angle > 5.0:
                             search_dir = -1
                         else:
                             search_dir = 1
 
-                        search_speed = getattr(p, 'search_yaw_speed', 20)
+                        search_speed = getattr(p, 'search_yaw_speed', 25)
                         dir_str = "右" if search_dir > 0 else "左"
 
                         if p.camera_mode == "downward":
@@ -375,18 +403,36 @@ class LineTraceEngine:
 
                         result.forward_speed = 0
                         result.tracking_state = 'searching'
-                        result.status_message = f'自動探索: {dir_str}方向反転スキャン'
+                        if had_recent_corner:
+                            result.status_message = f'自動探索: {dir_str}旋回継続スキャン'
+                        else:
+                            result.status_message = f'自動探索: {dir_str}方向反転スキャン'
 
                     else:
-                        # Phase 4: 完全ロスト・安全ホバリング待機 (5.0s超)
-                        self._filtered_lr = 0.0
-                        self._filtered_fb = 0.0
-                        self._filtered_yaw = 0.0
-                        result.lr_value = 0
-                        result.forward_speed = 0
-                        result.yaw_value = 0
-                        result.tracking_state = 'lost'
-                        result.status_message = 'ラインロスト: 安全ホバリング待機中'
+                        # Phase 4: ロスト確定フェーズ (5.5s超)
+                        if getattr(p, 'lost_auto_rotate', False):
+                            # オプション: ロスト時ホバリング自動旋回モード (360°探索スキャン)
+                            self._filtered_lr = 0.0
+                            self._filtered_fb = 0.0
+                            search_speed = getattr(p, 'search_yaw_speed', 20)
+                            rotate_dir = 1 if (self._recent_corner_dir == 'right' or self._last_seen_dx >= 0) else -1
+                            self._filtered_yaw = float(rotate_dir * search_speed)
+                            result.lr_value = 0
+                            result.forward_speed = 0
+                            result.yaw_value = int(self._filtered_yaw)
+                            result.tracking_state = 'searching'
+                            dir_name = "右" if rotate_dir > 0 else "左"
+                            result.status_message = f'自動探索: ホバリング自動旋回中 ({dir_name}360°スキャン)'
+                        else:
+                            # 通常: 完全ロスト・安全ホバリング待機 (5.5s超)
+                            self._filtered_lr = 0.0
+                            self._filtered_fb = 0.0
+                            self._filtered_yaw = 0.0
+                            result.lr_value = 0
+                            result.forward_speed = 0
+                            result.yaw_value = 0
+                            result.tracking_state = 'lost'
+                            result.status_message = 'ラインロスト: 安全ホバリング待機中'
 
                 else:
                     # 初期状態または未追従時の未検出

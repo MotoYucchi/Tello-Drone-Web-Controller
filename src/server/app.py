@@ -230,8 +230,10 @@ class LineTraceParamsRequest(BaseModel):
     forward_speed: int = Field(default=15, ge=0, le=100)
     deadzone: float = Field(default=20.0, ge=0, le=200)
     yaw_limit: float = Field(default=60.0, ge=0, le=100)
-    corner_recovery_back_speed: int = Field(default=8, ge=0, le=30)
-    corner_memory_sec: float = Field(default=3.0, ge=0.5, le=10.0)
+    corner_recovery_back_speed: int = Field(default=10, ge=0, le=48)
+    corner_memory_sec: float = Field(default=10.0, ge=0.5, le=30.0)
+    lost_auto_rotate: bool = Field(default=False, description="ロスト時のホバリングで360度自動旋回探索")
+    lost_backtrack: bool = Field(default=False, description="ロスト時に直前位置まで後退復帰")
 
 
 # =========================================================================

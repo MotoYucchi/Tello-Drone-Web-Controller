@@ -208,14 +208,16 @@ When accessing the web app from a touchscreen device over the local network:
   - **EMA Smoothing Filter**: Applies Exponential Moving Average to yaw/roll control values, rejecting high-frequency vision jitter for stable, steady flight.
   - **Smart Corner & Deviation Deceleration**: Automatically reduces forward speed during tight turns or significant offset to prevent centrifugal course-out.
 - **Auto-Recovery State Machine (Line Lost)**:
-  - **Corner Memory**: For standard drones, if a 90° corner or sharp turn is overshot and disappears from the bottom/edge of the frame in the last few frames, the system retains the detected turn direction (right or left) over several seconds to prevent scanning in the wrong direction.
+  - **Corner Memory**: For standard drones, if a 90° corner or sharp turn is overshot, the system retains the detected turn direction (right or left) for a configurable duration (default 10s, adjustable 1-20s via UI slider) to prevent scanning in the wrong direction. During turns, forward speed is kept low until re-aligned to enhance corner curving capability.
   - **Phase 1 (0.0s - 0.4s) Inertia Stabilization**: Instantly cuts forward speed to 0 and commands neutral hover to cancel forward momentum.
-  - **Phase 2 (0.4s - 3.0s) Direction Scan & Overshoot Recovery**:
-    - **Standard Drone (Forward tilt)**: If a corner was recently detected, executes a gentle reverse flight (`fb = -8`, configurable 3-20 via UI) while yawing toward the remembered direction to pull the overshot line back into the camera FOV. If a straight line was lost, scans yaw in-place.
-    - **Modified Drone (Downward-facing)**: Scans using a combination of lateral roll translation and yaw rotation.
-  - **Phase 3 (3.0s - 5.0s) Reverse Direction Scan**: Scans in the opposite direction if still unacquired.
-  - **Phase 4 (>5.0s) Safe Hover Standby**: Holds a stationary hover if the line remains undetected.
-  - **Autonomous Resumption**: Once the line reappears in the camera frame, tracking seamlessly resumes **without manual operator intervention** (forward speed strictly remains <= 0 during scanning to prevent runaway collisions).
+  - **Phase 2 (0.4s - 3.5s) Backtrack Recovery & Scan**:
+    - **Standard Drone (Forward tilt)**: If a corner was recently detected, executes reverse flight (speed up to 48, configurable via UI) while yawing toward the remembered direction to pull the overshot line back into the camera FOV. With the "Backtrack on Lost" option enabled, reverse flight is also executed on straight/curved line loss to retrace back to the last known position.
+    - **Modified Drone (Downward-facing)**: Scans using lateral roll translation and yaw rotation.
+  - **Phase 3 (3.5s - 5.5s) Continuous Search**: Continues searching in the corner direction or reverses scan direction.
+  - **Phase 4 (>5.5s) Safe Hover Standby / Auto-Rotate**:
+    - **Auto-Rotate while Hovering (Option)**: When enabled, continues a gentle 360-degree yaw rotation while hovering to search for lines in all directions.
+    - **Default**: Safely maintains a stationary neutral hover in place.
+  - **Autonomous Resumption**: Once the line reappears in the camera frame, tracking seamlessly resumes **without manual operator intervention** (forward speed strictly remains <= 0 during recovery scanning to prevent collisions).
 
 ---
 

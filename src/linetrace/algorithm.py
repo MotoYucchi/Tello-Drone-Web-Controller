@@ -390,7 +390,7 @@ class LineTraceAlgorithm:
             if is_corner:
                 # コーナーを通り過ぎて見失うのを防ぐため、前進速度を2に落としてその場旋回を優先
                 fb = 2
-                corner_yaw = min(yaw_limit, 40.0)
+                corner_yaw = min(yaw_limit, 45.0)
                 yaw = int(corner_yaw if corner_dir == 'right' else -corner_yaw)
             else:
                 # 旋回量や横ズレが大きいときは前進を抑制してコースアウトを防止

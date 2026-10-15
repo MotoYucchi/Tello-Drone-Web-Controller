@@ -44,6 +44,10 @@ def test_linetrace_params(client):
         "forward_speed": 20,
         "deadzone": 15.0,
         "yaw_limit": 50.0,
+        "corner_recovery_back_speed": 48,
+        "corner_memory_sec": 15.0,
+        "lost_auto_rotate": True,
+        "lost_backtrack": True,
     }
     response = client.post("/api/linetrace/params", json=new_params)
     assert response.status_code == 200
@@ -52,6 +56,10 @@ def test_linetrace_params(client):
     assert data["params"]["camera_mode"] == "downward"
     assert data["params"]["forward_speed"] == 20
     assert data["params"]["gaussian_ksize"] == 7
+    assert data["params"]["corner_recovery_back_speed"] == 48
+    assert data["params"]["corner_memory_sec"] == 15.0
+    assert data["params"]["lost_auto_rotate"] is True
+    assert data["params"]["lost_backtrack"] is True
 
 
 def test_screenshot_when_not_streaming(client):
